@@ -79,6 +79,7 @@ Tài liệu công bố chính thức về mức độ tương thích định d�
 | `ZOOM OBJECT` | `ZS`, `ZO` | Vùng nhìn | Phóng to đối tượng đang chọn |
 | `MODEL` | `MS` | Không gian | Chuyển sang không gian mô hình 2D (Model Space) |
 | `LAYOUT` | `PS`, `PAPER` | Không gian | Chuyển sang không gian giấy in ấn (Paper Space Layout) |
+| `TAKEOFF` | `BOM`, `COUNT`, `QUANTITY` | Tiên lượng | Thống kê khối lượng bóc tách dự toán (chiều dài, block, diện tích) xuất CSV |
 | `EXPORT` | `PLOT`, `PRINT` | Xuất bản | Xuất ảnh PNG độ nét cao |
 | `SPLINE` | `SPL` | Vẽ | Tạo đường cong mượt qua các điểm điều khiển |
 | `REVCLOUD` | `CLOUD` | Chú thích | Tạo đám mây ghi chú sửa đổi thiết kế |

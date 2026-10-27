@@ -451,6 +451,11 @@ function bindShellEvents() {
 
 let showGrid = true;
 let activeSpace = "model";
+let openDocuments = [
+  { id: 1, title: "Drawing1", path: null, dirty: false }
+];
+let activeDocId = 1;
+let nextDocId = 2;
 let lastTool = "line";
 let filletRadius = 0;
 let chamferDist = 5;
@@ -1396,6 +1401,7 @@ function renderRibbon() {
           <button class="tool-button ${activeTool==='extend'?'selected':''}" data-tool="extend"><span class="tool-icon">⇥</span><span>${t("tool_extend")}</span></button>
           <button class="tool-button ${activeTool==='join'?'selected':''}" data-tool="join"><span class="tool-icon">☍</span><span>${t("tool_join")}</span></button>
           <button class="tool-button" id="offsetBtn"><span class="tool-icon">⫽</span><span>${t("tool_offset")}</span></button>
+          <button class="tool-button" id="takeoffRibbonBtn" title="Thống kê khối lượng (TAKEOFF)"><span class="tool-icon">📊</span><span>${currentLang === "vi" ? "Tiên lượng (BOM)" : "Takeoff"}</span></button>
           <button class="tool-button" id="explodeBtn"><span class="tool-icon">💥</span><span>${t("tool_explode")}</span></button>
           <button class="tool-button danger" id="eraseBtn"><span class="tool-icon">⌫</span><span>${t("tool_erase")}</span></button>
           <button class="tool-button compact" id="undoBtn"><span class="tool-icon">↶</span><span>${t("tool_undo")}</span></button>
@@ -1632,6 +1638,8 @@ function render() {
   if (dirtyDot) dirtyDot.classList.toggle("visible", model.dirty);
 
   renderProperties();
+    const toBtn = $("#takeoffRibbonBtn");
+    if (toBtn) toBtn.onclick = showTakeoffModal;
 
   const layerList = $("#layerList");
   if (layerList) {
@@ -1670,6 +1678,7 @@ function render() {
   }
 
   renderRibbon();
+  renderDocumentTabs();
   draw();
 }
 
@@ -2489,6 +2498,172 @@ function bindCanvasEvents(viewportEl, canvasEl) {
 }
 
 // Calculate Area of Polygon (Shoelace Formula)
+
+// Takeoff & Bill of Quantities (BOM) Extraction for Construction Costing
+function computeTakeoffData() {
+  const layerStats = {};
+  const blockStats = {};
+  const areaItems = [];
+
+  for (const l of model.layers) {
+    layerStats[l.name] = { count: 0, length: 0, color: l.color || "#79c9dc" };
+  }
+
+  for (const e of model.entities) {
+    const lyr = e.layer || "0";
+    if (!layerStats[lyr]) layerStats[lyr] = { count: 0, length: 0, color: "#79c9dc" };
+    layerStats[lyr].count++;
+
+    if (e.kind === "line") {
+      const len = Math.hypot(e.x2 - e.x1, e.y2 - e.y1);
+      layerStats[lyr].length += len;
+    } else if (e.kind === "arc") {
+      const sweep = (e.end - e.start + Math.PI * 2) % (Math.PI * 2);
+      const len = sweep * e.radius;
+      layerStats[lyr].length += len;
+    } else if (e.kind === "polyline") {
+      let len = 0;
+      const pts = e.points;
+      const n = e.closed ? pts.length : pts.length - 1;
+      for (let i = 0; i < n; i++) {
+        const a = pts[i];
+        const b = pts[(i + 1) % pts.length];
+        len += Math.hypot(b.x - a.x, b.y - a.y);
+      }
+      layerStats[lyr].length += len;
+
+      if (e.closed && pts.length >= 3) {
+        const { area, perimeter } = calculatePolygonArea(pts);
+        areaItems.push({
+          type: "Closed Polyline",
+          layer: lyr,
+          area: area / 1e6, // m²
+          perimeter: perimeter / 1e3 // m
+        });
+      }
+    } else if (e.kind === "circle") {
+      const circum = 2 * Math.PI * e.radius;
+      const a = Math.PI * e.radius * e.radius;
+      layerStats[lyr].length += circum;
+      areaItems.push({
+        type: "Circle",
+        layer: lyr,
+        area: a / 1e6,
+        perimeter: circum / 1e3
+      });
+    } else if (e.kind === "insert") {
+      const name = e.blockName || "ANONYMOUS";
+      if (!blockStats[name]) blockStats[name] = { count: 0, layer: lyr };
+      blockStats[name].count++;
+    }
+  }
+
+  return { layerStats, blockStats, areaItems };
+}
+
+function showTakeoffModal() {
+  const existing = $("#takeoffModalOverlay");
+  if (existing) existing.remove();
+
+  const data = computeTakeoffData();
+  const overlay = document.createElement("div");
+  overlay.className = "takeoff-modal-overlay";
+  overlay.id = "takeoffModalOverlay";
+
+  let layerRows = "";
+  for (const [name, s] of Object.entries(data.layerStats)) {
+    if (s.count === 0) continue;
+    layerRows += `
+      <tr>
+        <td><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${s.color};margin-right:6px;"></i>${escapeHtml(name)}</td>
+        <td>${s.count}</td>
+        <td><strong>${(s.length / 1000).toFixed(3)} m</strong> (${s.length.toFixed(1)} mm)</td>
+      </tr>
+    `;
+  }
+
+  let blockRows = "";
+  for (const [name, b] of Object.entries(data.blockStats)) {
+    blockRows += `
+      <tr>
+        <td><strong>[${escapeHtml(name)}]</strong></td>
+        <td>${escapeHtml(b.layer)}</td>
+        <td><strong>${b.count}</strong> cái (units)</td>
+      </tr>
+    `;
+  }
+
+  let areaRows = "";
+  let totalArea = 0;
+  for (const a of data.areaItems) {
+    totalArea += a.area;
+    areaRows += `
+      <tr>
+        <td>${a.type}</td>
+        <td>${escapeHtml(a.layer)}</td>
+        <td><strong>${a.area.toFixed(3)} m²</strong></td>
+        <td>${a.perimeter.toFixed(3)} m</td>
+      </tr>
+    `;
+  }
+
+  overlay.innerHTML = `
+    <div class="takeoff-modal">
+      <div class="takeoff-modal-header">
+        <span>📊 ${currentLang === "vi" ? "Bảng thống kê khối lượng & Tiên lượng (Takeoff / BOM)" : "Quantity Takeoff & Bill of Materials"}</span>
+        <button class="takeoff-modal-close" id="closeTakeoffBtn">×</button>
+      </div>
+      <div class="takeoff-modal-body">
+        <div class="takeoff-section-title">📏 1. Thống kê chiều dài theo Layer (Linear Takeoff)</div>
+        <table class="takeoff-table">
+          <thead><tr><th>Tên Layer</th><th>Số thực thể</th><th>Tổng chiều dài (m)</th></tr></thead>
+          <tbody>${layerRows || "<tr><td colspan='3'>(Chưa có thực thể đường vẽ)</td></tr>"}</tbody>
+        </table>
+
+        <div class="takeoff-section-title">🧱 2. Thống kê số lượng Block / Cấu kiện (Component Count)</div>
+        <table class="takeoff-table">
+          <thead><tr><th>Tên Block / Cấu kiện</th><th>Layer</th><th>Số lượng</th></tr></thead>
+          <tbody>${blockRows || "<tr><td colspan='3'>(Chưa có Block Insert trong bản vẽ)</td></tr>"}</tbody>
+        </table>
+
+        <div class="takeoff-section-title">⏢ 3. Thống kê diện tích hình khép kín (Area Takeoff) - Tổng: ${totalArea.toFixed(3)} m²</div>
+        <table class="takeoff-table">
+          <thead><tr><th>Loại hình</th><th>Layer</th><th>Diện tích (m²)</th><th>Chu vi (m)</th></tr></thead>
+          <tbody>${areaRows || "<tr><td colspan='4'>(Chưa có hình khép kín)</td></tr>"}</tbody>
+        </table>
+      </div>
+      <div class="takeoff-modal-footer">
+        <button class="takeoff-btn secondary" id="copyTakeoffBtn">📋 Sao chép CSV</button>
+        <button class="takeoff-btn" id="closeTakeoffFooterBtn">Đóng</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  $("#closeTakeoffBtn").onclick = close;
+  $("#closeTakeoffFooterBtn").onclick = close;
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+
+  $("#copyTakeoffBtn").onclick = () => {
+    let csv = "CONCOSTCAD QUANTITY TAKEOFF\n\nLAYER,COUNT,LENGTH_M\n";
+    for (const [name, s] of Object.entries(data.layerStats)) {
+      if (s.count > 0) csv += `"${name}",${s.count},${(s.length / 1000).toFixed(3)}\n`;
+    }
+    csv += "\nBLOCK_NAME,LAYER,COUNT\n";
+    for (const [name, b] of Object.entries(data.blockStats)) {
+      csv += `"${name}","${b.layer}",${b.count}\n`;
+    }
+    csv += "\nSHAPE,LAYER,AREA_M2,PERIMETER_M\n";
+    for (const a of data.areaItems) {
+      csv += `"${a.type}","${a.layer}",${a.area.toFixed(3)},${a.perimeter.toFixed(3)}\n`;
+    }
+    navigator.clipboard.writeText(csv);
+    setStatus(currentLang === "vi" ? "Đã sao chép bảng thống kê khối lượng sang Clipboard (CSV)" : "Takeoff data copied to Clipboard");
+  };
+}
+
 function calculatePolygonArea(pts) {
   if (pts.length < 3) return { area: 0, perimeter: 0 };
   let areaSum = 0;
@@ -2599,6 +2774,10 @@ function bindCommandBarEvents() {
         if (cmd === "ZE" || cmd === "ZOOM EXTENTS") { zoomToExtents(); return; }
     if (cmd === "ZS" || cmd === "ZOOM SELECTED" || cmd === "ZOOM OBJECT") { zoomSelected(); return; }
     if (cmd === "EXPORT" || cmd === "PLOT" || cmd === "PRINT") { exportDrawingImage(); return; }
+    if (cmd === "TAKEOFF" || cmd === "BOM" || cmd === "COUNT" || cmd === "QUANTITY") {
+      showTakeoffModal();
+      return;
+    }
     if (cmd === "MODEL" || cmd === "MS") {
       const b = $("button[data-space='model']");
       if (b) b.click();
@@ -2773,3 +2952,65 @@ setInterval(async () => {
     } catch (_) {}
   }
 }, 180000);
+
+
+function renderDocumentTabs() {
+  const container = $(".drawing-tab");
+  if (!container) return;
+
+  const tabsHtml = openDocuments.map((d) => `
+    <div class="doc-tab ${d.id === activeDocId ? 'active' : ''}" data-doc-id="${d.id}">
+      <span class="file-dot"></span>
+      <span class="doc-title">${escapeHtml(d.title)}</span>
+      <span class="dirty-dot ${d.dirty ? 'visible' : ''}"></span>
+      ${openDocuments.length > 1 ? `<button class="close-tab" data-close-id="${d.id}">×</button>` : ''}
+    </div>
+  `).join("");
+
+  container.innerHTML = `
+    ${tabsHtml}
+    <button class="add-tab-btn" id="addDocTabBtn" title="Bản vẽ mới (New Drawing)">＋</button>
+  `;
+
+  $$(".doc-tab").forEach((tab) => {
+    const id = parseInt(tab.dataset.docId, 10);
+    tab.onclick = (e) => {
+      if (e.target.classList.contains("close-tab")) return;
+      if (id !== activeDocId) {
+        activeDocId = id;
+        renderDocumentTabs();
+      }
+    };
+  });
+
+  $$(".close-tab").forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const id = parseInt(btn.dataset.closeId, 10);
+      if (openDocuments.length <= 1) return;
+      openDocuments = openDocuments.filter((d) => d.id !== id);
+      if (activeDocId === id) {
+        activeDocId = openDocuments[openDocuments.length - 1].id;
+      }
+      renderDocumentTabs();
+      draw();
+    };
+  });
+
+  const addBtn = $("#addDocTabBtn");
+  if (addBtn) {
+    addBtn.onclick = async () => {
+      const newDoc = {
+        id: nextDocId++,
+        title: `Drawing${openDocuments.length + 1}`,
+        path: null,
+        dirty: false
+      };
+      openDocuments.push(newDoc);
+      activeDocId = newDoc.id;
+      await sync(invoke("new_drawing"));
+      renderDocumentTabs();
+      setStatus(currentLang === "vi" ? `Đã tạo bản vẽ mới (${newDoc.title})` : `New drawing created (${newDoc.title})`);
+    };
+  }
+}

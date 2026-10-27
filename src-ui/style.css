@@ -1026,3 +1026,183 @@ button {
   background: rgba(255, 255, 255, 0.1);
   color: #38bdf8;
 }
+
+/* Multi-Document Tabs */
+.drawing-tab {
+  height: 30px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  background: #1d2127;
+  border-bottom: 1px solid #373e46;
+  padding: 0 4px;
+  gap: 3px;
+  overflow-x: auto;
+}
+
+.doc-tab {
+  height: 25px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  background: #2a3038;
+  border: 1px solid #3d4550;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  color: #94a3b8;
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+
+.doc-tab:hover {
+  background: #333a44;
+  color: #e2e8f0;
+}
+
+.doc-tab.active {
+  background: #101318;
+  border-color: #3b82f6 #3b82f6 transparent;
+  color: #38bdf8;
+  font-weight: 600;
+}
+
+.add-tab-btn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  font-size: 14px;
+  padding: 2px 8px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all 0.15s ease;
+}
+
+.add-tab-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #38bdf8;
+}
+
+/* Takeoff / Quantity Extraction Modal */
+.takeoff-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.takeoff-modal {
+  width: 740px;
+  max-width: 92vw;
+  max-height: 85vh;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.65);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: inherit;
+}
+
+.takeoff-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  background: #21262d;
+  border-bottom: 1px solid #30363d;
+  color: #f0f6fc;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.takeoff-modal-close {
+  background: transparent;
+  border: none;
+  color: #8b949e;
+  font-size: 18px;
+  cursor: pointer;
+}
+.takeoff-modal-close:hover { color: #f0f6fc; }
+
+.takeoff-modal-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.takeoff-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #58a6ff;
+  margin: 12px 0 6px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.takeoff-section-title:first-child { margin-top: 0; }
+
+.takeoff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: #c9d1d9;
+  margin-bottom: 12px;
+}
+
+.takeoff-table th {
+  background: #21262d;
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid #30363d;
+  font-weight: 600;
+  color: #8b949e;
+}
+
+.takeoff-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid #21262d;
+}
+
+.takeoff-table tr:hover td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.takeoff-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 18px;
+  background: #161b22;
+  border-top: 1px solid #30363d;
+}
+
+.takeoff-btn {
+  background: #238636;
+  border: 1px solid rgba(240, 246, 252, 0.1);
+  color: #ffffff;
+  padding: 6px 14px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.takeoff-btn.secondary {
+  background: #21262d;
+  color: #c9d1d9;
+  border-color: #30363d;
+}
+
+.takeoff-btn:hover {
+  filter: brightness(1.15);
+}
