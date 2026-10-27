@@ -38,6 +38,7 @@ const i18n = {
     tool_chamfer: "Vát mép (Chamfer)",
     tool_trim: "Cắt xén (Trim)",
     tool_extend: "Kéo dài (Extend)",
+    tool_dim: "Ghi kích thước (Dim)",
     tool_move: "Di chuyển",
     tool_copy: "Sao chép",
     tool_rotate: "Xoay",
@@ -111,6 +112,7 @@ const i18n = {
     tool_chamfer: "Chamfer",
     tool_trim: "Trim",
     tool_extend: "Extend",
+    tool_dim: "Dimension",
     tool_move: "Move",
     tool_copy: "Copy",
     tool_rotate: "Rotate",
@@ -393,6 +395,11 @@ function bindShellEvents() {
 
   $("#newLayerInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") $("#confirmAddLayer").click();
+        if ((e.key === " " || e.code === "Space") && activeTool === "select" && document.activeElement !== $("#commandInput") && document.activeElement !== $("#newLayerInput") && !document.activeElement.classList.contains("prop-input")) {
+      e.preventDefault();
+      chooseTool(lastTool);
+      return;
+    }
     if (e.key === "Escape") {
       $("#newLayerContainer").style.display = "none";
       isAddingLayer = false;
@@ -404,6 +411,7 @@ function bindShellEvents() {
 }
 
 let showGrid = true;
+let lastTool = "line";
 let filletRadius = 0;
 let chamferDist = 5;
 const setStatus = (s) => {
@@ -477,379 +485,15 @@ function hitTestEntity(worldPoint, tolerance) {
     const layerObj = model.layers.find((l) => l.name === e.layer);
     if (layerObj && (layerObj.off || layerObj.frozen)) continue;
 
-    let dist = Infinity;
-    if (e.kind === "circle") {
-      const dCenter = Math.hypot(worldPoint.x - e.cx, worldPoint.y - e.cy);
-      if (Math.abs(dCenter - e.radius) <= tolerance) {
-        dist = Math.abs(dCenter - e.radius);
-      }
-    } else if (e.kind === "text") {
-      const estW = (e.text || "").length * (e.height || 2.5) * 0.6;
-      const h = e.height || 2.5;
-      if (worldPoint.x >= e.x - tolerance && worldPoint.x <= e.x + estW + tolerance &&
-          worldPoint.y >= e.y - h - tolerance && worldPoint.y <= e.y + tolerance) {
-        dist = 0;
-      }
-    } else if (e.kind === "line") {
-      dist = pointSegmentDist(worldPoint.x, worldPoint.y, e.x1, e.y1, e.x2, e.y2);
-    } else if (e.kind === "arc") {
-      const dCenter = Math.hypot(worldPoint.x - e.x, worldPoint.y - e.y);
-      const angle = Math.atan2(worldPoint.y - e.y, worldPoint.x - e.x);
-      if (Math.abs(dCenter - e.radius) <= tolerance && isAngleBetween(angle, e.start, e.end)) {
-        dist = Math.abs(dCenter - e.radius);
-      }
-    } else if (e.kind === "circle") {
-      const c = worldToScreen(e.cx, e.cy);
-      ctx.beginPath();
-      ctx.arc(c.x, c.y, e.radius * zoom, 0, Math.PI * 2);
-      ctx.stroke();
-      if (isSelected) {
-        drawGrip(e.cx, e.cy);
-        drawGrip(e.cx + e.radius, e.cy);
-        drawGrip(e.cx - e.radius, e.cy);
-        drawGrip(e.cx, e.cy + e.radius);
-        drawGrip(e.cx, e.cy - e.radius);
-      }
-    } else if (e.kind === "text") {
-      const p = worldToScreen(e.x, e.y);
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(-e.rotation);
-      const fontSize = Math.max(10, Math.round((e.height || 2.5) * zoom));
-      ctx.font = `${fontSize}px 'Inter', sans-serif`;
-      ctx.fillStyle = isSelected ? "#00e5ff" : "#e2e8f0";
-      ctx.fillText(e.text, 0, 0);
-      if (isSelected) {
-        const textMetrics = ctx.measureText(e.text);
-        ctx.strokeStyle = "rgba(0, 229, 255, 0.4)";
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 3]);
-        ctx.strokeRect(0, -fontSize, textMetrics.width, fontSize * 1.2);
-        ctx.setLineDash([]);
-      }
-      ctx.restore();
-      if (isSelected) {
-        drawGrip(e.x, e.y);
-      }
-    } else if (e.kind === "polyline") {
-      const pts = e.points;
-      const n = e.closed ? pts.length : pts.length - 1;
-      for (let i = 0; i < n; i++) {
-        const a = pts[i];
-        const b = pts[(i + 1) % pts.length];
-        const bulge = a.bulge || 0;
-        if (Math.abs(bulge) >= 1e-6) {
-          const geom = bulgeGeometry(a, b, bulge);
-          if (geom) {
-            const dCenter = Math.hypot(worldPoint.x - geom.center.x, worldPoint.y - geom.center.y);
-            const angle = Math.atan2(worldPoint.y - geom.center.y, worldPoint.x - geom.center.x);
-            const endAngle = geom.startAngle + geom.sweep;
-            if (Math.abs(dCenter - geom.radius) <= tolerance) {
-              const startA = geom.sweep > 0 ? geom.startAngle : endAngle;
-              const endA = geom.sweep > 0 ? endAngle : geom.startAngle;
-              if (isAngleBetween(angle, startA, endA)) {
-                dist = Math.min(dist, Math.abs(dCenter - geom.radius));
-              }
-            }
-          }
-        } else {
-          dist = Math.min(dist, pointSegmentDist(worldPoint.x, worldPoint.y, a.x, a.y, b.x, b.y));
-        }
-      }
-    }
-
-    if (dist < minDistance) {
-      minDistance = dist;
-      closest = e;
-    }
-  }
-
-  return closest;
-}
-
-// Bounding Box computation for entities
-function getEntityBounds(e) {
-  if (e.kind === "line") {
-    return {
-      minX: Math.min(e.x1, e.x2),
-      maxX: Math.max(e.x1, e.x2),
-      minY: Math.min(e.y1, e.y2),
-      maxY: Math.max(e.y1, e.y2)
-    };
-  }
-  if (e.kind === "circle") {
-    return {
-      minX: e.cx - e.radius,
-      maxX: e.cx + e.radius,
-      minY: e.cy - e.radius,
-      maxY: e.cy + e.radius
-    };
-  }
-  if (e.kind === "text") {
-    const estW = (e.text || "").length * (e.height || 2.5) * 0.6;
-    return {
-      minX: e.x,
-      maxX: e.x + estW,
-      minY: e.y - (e.height || 2.5),
-      maxY: e.y
-    };
-  }
-  if (e.kind === "arc") {
-    return {
-      minX: e.x - e.radius,
-      maxX: e.x + e.radius,
-      minY: e.y - e.radius,
-      maxY: e.y + e.radius
-    };
-  }
-  if (e.kind === "polyline") {
-    const xs = e.points.map((p) => p.x);
-    const ys = e.points.map((p) => p.y);
-    return {
-      minX: Math.min(...xs),
-      maxX: Math.max(...xs),
-      minY: Math.min(...ys),
-      maxY: Math.max(...ys)
-    };
-  }
-  return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
-}
-
-// Window & Crossing Selection Query
-function queryEntitiesInBox(p1, p2) {
-  const isWindow = p2.x >= p1.x; // Left-to-Right = Window, Right-to-Left = Crossing
-  const boxMinX = Math.min(p1.x, p2.x);
-  const boxMaxX = Math.max(p1.x, p2.x);
-  const boxMinY = Math.min(p1.y, p2.y);
-  const boxMaxY = Math.max(p1.y, p2.y);
-
-  const matched = [];
-
-  for (const e of model.entities) {
-    const layerObj = model.layers.find((l) => l.name === e.layer);
-    if (layerObj && (layerObj.off || layerObj.frozen)) continue;
-
-    const b = getEntityBounds(e);
-
-    if (isWindow) {
-      // Must be completely inside
-      if (b.minX >= boxMinX && b.maxX <= boxMaxX && b.minY >= boxMinY && b.maxY <= boxMaxY) {
-        matched.push(e.handle);
-      }
-    } else {
-      // Crossing: Bounding box intersects
-      const intersects = !(b.maxX < boxMinX || b.minX > boxMaxX || b.maxY < boxMinY || b.minY > boxMaxY);
-      if (intersects) {
-        matched.push(e.handle);
-      }
-    }
-  }
-
-  return matched;
-}
-
-
-// Grip Hit-Testing Helper
-function findNearestGrip(worldPoint, pixelTol = 8) {
-  if (selectedHandles.size !== 1) return null;
-  const tol = pixelTol / zoom;
-  const handle = Array.from(selectedHandles)[0];
-  const ent = model.entities.find((e) => e.handle === handle);
-  if (!ent) return null;
-
-  if (ent.kind === "line") {
-    if (Math.hypot(worldPoint.x - ent.x1, worldPoint.y - ent.y1) <= tol) return { handle, kind: "line", id: "start", pt: { x: ent.x1, y: ent.y1 } };
-    if (Math.hypot(worldPoint.x - ent.x2, worldPoint.y - ent.y2) <= tol) return { handle, kind: "line", id: "end", pt: { x: ent.x2, y: ent.y2 } };
-    const mx = (ent.x1 + ent.x2) / 2, my = (ent.y1 + ent.y2) / 2;
-    if (Math.hypot(worldPoint.x - mx, worldPoint.y - my) <= tol) return { handle, kind: "line", id: "mid", pt: { x: mx, y: my } };
-  } else if (ent.kind === "circle") {
-    if (Math.hypot(worldPoint.x - ent.cx, worldPoint.y - ent.cy) <= tol) return { handle, kind: "circle", id: "center", pt: { x: ent.cx, y: ent.cy } };
-    if (Math.hypot(worldPoint.x - (ent.cx + ent.radius), worldPoint.y - ent.cy) <= tol) return { handle, kind: "circle", id: "quad_e", pt: { x: ent.cx + ent.radius, y: ent.cy } };
-    if (Math.hypot(worldPoint.x - (ent.cx - ent.radius), worldPoint.y - ent.cy) <= tol) return { handle, kind: "circle", id: "quad_w", pt: { x: ent.cx - ent.radius, y: ent.cy } };
-    if (Math.hypot(worldPoint.x - ent.cx, worldPoint.y - (ent.cy + ent.radius)) <= tol) return { handle, kind: "circle", id: "quad_n", pt: { x: ent.cx, y: ent.cy + ent.radius } };
-    if (Math.hypot(worldPoint.x - ent.cx, worldPoint.y - (ent.cy - ent.radius)) <= tol) return { handle, kind: "circle", id: "quad_s", pt: { x: ent.cx, y: ent.cy - ent.radius } };
-  } else if (ent.kind === "text") {
-    if (Math.hypot(worldPoint.x - ent.x, worldPoint.y - ent.y) <= tol) return { handle, kind: "text", id: "pos", pt: { x: ent.x, y: ent.y } };
-  } else if (ent.kind === "arc") {
-    if (Math.hypot(worldPoint.x - ent.x, worldPoint.y - ent.y) <= tol) return { handle, kind: "arc", id: "center", pt: { x: ent.x, y: ent.y } };
-    const sx = ent.x + ent.radius * Math.cos(ent.start), sy = ent.y + ent.radius * Math.sin(ent.start);
-    if (Math.hypot(worldPoint.x - sx, worldPoint.y - sy) <= tol) return { handle, kind: "arc", id: "start", pt: { x: sx, y: sy } };
-    const ex = ent.x + ent.radius * Math.cos(ent.end), ey = ent.y + ent.radius * Math.sin(ent.end);
-    if (Math.hypot(worldPoint.x - ex, worldPoint.y - ey) <= tol) return { handle, kind: "arc", id: "end", pt: { x: ex, y: ey } };
-  } else if (ent.kind === "polyline") {
-    for (let i = 0; i < ent.points.length; i++) {
-      const p = ent.points[i];
-      if (Math.hypot(worldPoint.x - p.x, worldPoint.y - p.y) <= tol) return { handle, kind: "polyline", id: i, pt: { x: p.x, y: p.y } };
-    }
-  }
-  return null;
-}
-
-// Snap Detection
-function findNearestSnap(p, pixelRadius = 14) {
-  if (!snapEnabled) return null;
-  const tol = pixelRadius / zoom;
-  let best = null;
-  let bestDist = tol;
-
-  const consider = (pt, kind) => {
-    const d = Math.hypot(p.x - pt.x, p.y - pt.y);
-    if (d < bestDist) {
-      bestDist = d;
-      best = { point: pt, kind };
-    }
-  };
-
-  for (const e of model.entities) {
-    const layerObj = model.layers.find((l) => l.name === e.layer);
-    if (layerObj && (layerObj.off || layerObj.frozen)) continue;
-
-    if (e.kind === "line") {
-      consider({ x: e.x1, y: e.y1 }, "endpoint");
-      consider({ x: e.x2, y: e.y2 }, "endpoint");
-      consider({ x: (e.x1 + e.x2) / 2, y: (e.y1 + e.y2) / 2 }, "midpoint");
-    } else if (e.kind === "arc") {
-      consider({ x: e.x, y: e.y }, "center");
-      consider({ x: e.x + e.radius * Math.cos(e.start), y: e.y + e.radius * Math.sin(e.start) }, "endpoint");
-      consider({ x: e.x + e.radius * Math.cos(e.end), y: e.y + e.radius * Math.sin(e.end) }, "endpoint");
-    } else if (e.kind === "polyline") {
-      for (let i = 0; i < e.points.length; i++) {
-        consider(e.points[i], "endpoint");
-        if (i < e.points.length - 1 || e.closed) {
-          const next = e.points[(i + 1) % e.points.length];
-          consider({ x: (e.points[i].x + next.x) / 2, y: (e.points[i].y + next.y) / 2 }, "midpoint");
-        }
-      }
-    }
-  }
-
-  return best;
-}
-
-// Canvas Drawing Routines
-function resize() {
-  const canvas = $("#cadCanvas");
-  const viewport = $("#viewport");
-  if (!canvas || !viewport) return;
-  const r = viewport.getBoundingClientRect();
-  const d = window.devicePixelRatio || 1;
-  canvas.width = r.width * d;
-  canvas.height = r.height * d;
-  canvas.style.width = r.width + "px";
-  canvas.style.height = r.height + "px";
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(d, 0, 0, d, 0, 0);
-  draw();
-}
-
-function drawPolyline(pts, closed, isSelected) {
-  const canvas = $("#cadCanvas");
-  const ctx = canvas.getContext("2d");
-  if (!pts || !pts.length) return;
-  ctx.beginPath();
-  const first = worldToScreen(pts[0].x, pts[0].y);
-  ctx.moveTo(first.x, first.y);
-  const n = closed ? pts.length : pts.length - 1;
-
-  for (let i = 0; i < n; i++) {
-    const a = pts[i];
-    const b = pts[(i + 1) % pts.length];
-    const bulge = a.bulge || 0;
-    if (Math.abs(bulge) >= 1e-6) {
-      const geom = bulgeGeometry(a, b, bulge);
-      if (geom) {
-        const steps = Math.max(8, Math.ceil(Math.abs(geom.sweep) * geom.radius * zoom / 10));
-        for (let s = 1; s <= steps; s++) {
-          const angle = geom.startAngle + (geom.sweep * s) / steps;
-          const p = worldToScreen(
-            geom.center.x + geom.radius * Math.cos(angle),
-            geom.center.y + geom.radius * Math.sin(angle)
-          );
-          ctx.lineTo(p.x, p.y);
-        }
-        continue;
-      }
-    }
-    const screenB = worldToScreen(b.x, b.y);
-    ctx.lineTo(screenB.x, screenB.y);
-  }
-
-  if (closed) ctx.closePath();
-  ctx.stroke();
-}
-
-function drawGrip(worldX, worldY) {
-  const canvas = $("#cadCanvas");
-  const ctx = canvas.getContext("2d");
-  const s = worldToScreen(worldX, worldY);
-  ctx.fillStyle = "#00e5ff";
-  ctx.fillRect(s.x - 3.5, s.y - 3.5, 7, 7);
-  ctx.strokeStyle = "#004753";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(s.x - 3.5, s.y - 3.5, 7, 7);
-}
-
-function draw() {
-  const canvas = $("#cadCanvas");
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  const d = window.devicePixelRatio || 1;
-  const w = canvas.width / d;
-  const h = canvas.height / d;
-  ctx.setTransform(d, 0, 0, d, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#101318";
-  ctx.fillRect(0, 0, w, h);
-
-  // Draw Grid
-  if (showGrid) {
-    const step = 50 * zoom;
-    const base = worldToScreen(0, 0);
-    const gridStep = step < 12 ? step * 5 : step;
-    if (gridStep > 3 && gridStep < 400) {
-      ctx.beginPath();
-      ctx.strokeStyle = "#1b2027";
-      ctx.lineWidth = 1;
-      let ox = ((base.x % gridStep) + gridStep) % gridStep;
-      let oy = ((base.y % gridStep) + gridStep) % gridStep;
-      for (let x = ox; x < w; x += gridStep) {
-        ctx.moveTo(Math.round(x) + 0.5, 0);
-        ctx.lineTo(Math.round(x) + 0.5, h);
-      }
-      for (let y = oy; y < h; y += gridStep) {
-        ctx.moveTo(0, Math.round(y) + 0.5);
-        ctx.lineTo(w, Math.round(y) + 0.5);
-      }
-      ctx.stroke();
-    }
-
-    // Origin Axes
-    ctx.strokeStyle = "#2e3b4a";
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(0, Math.round(base.y) + 0.5);
-    ctx.lineTo(w, Math.round(base.y) + 0.5);
-    ctx.moveTo(Math.round(base.x) + 0.5, 0);
-    ctx.lineTo(Math.round(base.x) + 0.5, h);
-    ctx.stroke();
-  }
-
-  // Draw Entities
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-
-  for (const e of model.entities) {
-    const layerObj = model.layers.find((l) => l.name === e.layer);
-    if (layerObj && (layerObj.off || layerObj.frozen)) continue;
-
     const isSelected = selectedHandles.has(e.handle);
+    const layerColor = layerObj && layerObj.color ? layerObj.color : "#79c9dc";
     if (isSelected) {
       ctx.strokeStyle = "#00e5ff";
       ctx.lineWidth = 2.4;
       ctx.shadowColor = "rgba(0, 229, 255, 0.6)";
       ctx.shadowBlur = 6;
     } else {
-      ctx.strokeStyle = "#79c9dc";
+      ctx.strokeStyle = layerColor;
       ctx.lineWidth = 1.6;
       ctx.shadowColor = "transparent";
       ctx.shadowBlur = 0;
@@ -882,8 +526,41 @@ function draw() {
         drawGrip(e.x + e.radius * Math.cos(e.start), e.y + e.radius * Math.sin(e.start));
         drawGrip(e.x + e.radius * Math.cos(e.end), e.y + e.radius * Math.sin(e.end));
       }
+    } else if (e.kind === "circle") {
+      const c = worldToScreen(e.cx, e.cy);
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, e.radius * zoom, 0, Math.PI * 2);
+      ctx.stroke();
+      if (isSelected) {
+        drawGrip(e.cx, e.cy);
+        drawGrip(e.cx + e.radius, e.cy);
+        drawGrip(e.cx - e.radius, e.cy);
+        drawGrip(e.cx, e.cy + e.radius);
+        drawGrip(e.cx, e.cy - e.radius);
+      }
+    } else if (e.kind === "text") {
+      const p = worldToScreen(e.x, e.y);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(-e.rotation);
+      const fontSize = Math.max(10, Math.round((e.height || 2.5) * zoom));
+      ctx.font = `${fontSize}px 'Inter', sans-serif`;
+      ctx.fillStyle = isSelected ? "#00e5ff" : layerColor;
+      ctx.fillText(e.text, 0, 0);
+      if (isSelected) {
+        const textMetrics = ctx.measureText(e.text);
+        ctx.strokeStyle = "rgba(0, 229, 255, 0.4)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.strokeRect(0, -fontSize, textMetrics.width, fontSize * 1.2);
+        ctx.setLineDash([]);
+      }
+      ctx.restore();
+      if (isSelected) {
+        drawGrip(e.x, e.y);
+      }
     } else if (e.kind === "polyline") {
-      drawPolyline(e.points, e.closed, isSelected);
+      drawPolyline(e.points, e.closed, isSelected, layerColor);
       if (isSelected) {
         for (const p of e.points) drawGrip(p.x, p.y);
       }
@@ -891,6 +568,7 @@ function draw() {
   }
   ctx.shadowColor = "transparent";
   ctx.shadowBlur = 0;
+
 
   // Draw Window / Crossing Selection Box
   if (isBoxSelecting && boxStart && boxCurrent) {
@@ -1089,6 +767,7 @@ function renderRibbon() {
       </div>
       <div class="ribbon-group">
         <div class="tools file-tools">
+          <button class="tool-button compact ${activeTool==='dim'?'selected':''}" data-tool="dim"><span class="tool-icon">📐</span><span>${t("tool_dim")}</span></button>
           <button class="tool-button compact ${activeTool==='dist'?'selected':''}" data-tool="dist"><span class="tool-icon">📏</span><span>${t("tool_dist")}</span></button>
           <button class="tool-button compact ${activeTool==='area'?'selected':''}" data-tool="area"><span class="tool-icon">⏢</span><span>${t("tool_area")}</span></button>
         </div>
@@ -1131,6 +810,7 @@ function renderRibbon() {
     container.innerHTML = `
       <div class="ribbon-group">
         <div class="tools">
+          <button class="tool-button ${activeTool==='dim'?'selected':''}" data-tool="dim"><span class="tool-icon">📐</span><span>${t("tool_dim")}</span></button>
           <button class="tool-button ${activeTool==='dist'?'selected':''}" data-tool="dist"><span class="tool-icon">📏</span><span>${t("tool_dist")}</span></button>
           <button class="tool-button ${activeTool==='area'?'selected':''}" data-tool="area"><span class="tool-icon">⏢</span><span>${t("tool_area")}</span></button>
         </div>
@@ -1255,6 +935,7 @@ async function sync(promise) {
 }
 
 function chooseTool(tool) {
+  if (tool !== "select") lastTool = tool;
   activeTool = tool;
   points = [];
   moveBasePoint = null;
@@ -1274,6 +955,7 @@ function chooseTool(tool) {
     mirror: currentLang === "vi" ? "MIRROR · Chọn 2 điểm tạo trục đối xứng" : "MIRROR · Pick 2 mirror line points",
     dist: currentLang === "vi" ? "DIST · Chọn 2 điểm để đo khoảng cách" : "DIST · Pick 2 points to measure",
     area: currentLang === "vi" ? "AREA · Chọn các đỉnh đa giác hoặc hình khép kín; Enter để tính" : "AREA · Pick polygon vertices; Enter to finish",
+    dim: currentLang === "vi" ? "DIM · Chọn 2 điểm đo rồi chọn vị trí đường kích thước" : "DIM · Pick 2 measurement points then offset position",
     text: currentLang === "vi" ? "TEXT · Nhấp điểm chèn chữ (hoặc gõ tọa độ x,y)" : "TEXT · Pick text insertion point",
     fillet: currentLang === "vi" ? "FILLET · Chọn đường 1 rồi chọn đường 2 để bo góc" : "FILLET · Pick first line then second line",
     chamfer: currentLang === "vi" ? "CHAMFER · Chọn đường 1 rồi chọn đường 2 để vát mép" : "CHAMFER · Pick first line then second line",
@@ -1307,16 +989,23 @@ function render() {
       .map(
         (l) => `
         <div class="layer-row ${l.name === model.currentLayer ? "current" : ""}" data-layer="${escapeHtml(l.name)}">
-          <span class="layer-title"><i class="layer-swatch"></i>${escapeHtml(l.name)}</span>
+          <span class="layer-title"><i class="layer-swatch" style="background: ${l.color || '#79c9dc'}; box-shadow: 0 0 4px ${l.color || '#79c9dc'}44;" title="Đổi màu Layer" data-layer-color="${escapeHtml(l.name)}"></i>${escapeHtml(l.name)}</span>
           <span class="layer-eye" title="Toggle Visibility">${l.off ? "—" : "◉"}</span>
           <span class="layer-lock" title="Toggle Lock">${l.locked ? "▣" : "—"}</span>
         </div>`
       )
       .join("");
 
-    $$(".layer-row").forEach((row) => {
+    $(".layer-row").forEach((row) => {
       const layerName = row.dataset.layer;
       row.onclick = (e) => {
+        if (e.target.classList.contains("layer-swatch")) {
+          const colors = ["#ef4444", "#f59e0b", "#10b981", "#06b6d4", "#3b82f6", "#ec4899", "#ffffff", "#79c9dc"];
+          const curr = row.querySelector(".layer-swatch").style.background;
+          const next = colors[(colors.indexOf(curr) + 1) % colors.length] || colors[0];
+          sync(invoke("set_layer_color", { name: layerName, hex: next }));
+          return;
+        }
         if (e.target.classList.contains("layer-eye")) {
           const lyr = model.layers.find((l) => l.name === layerName);
           if (lyr) sync(invoke("set_layer_flags", { name: layerName, frozen: lyr.frozen, off: !lyr.off, locked: lyr.locked }));
@@ -1359,30 +1048,33 @@ function renderProperties() {
       const len = Math.hypot(ent.x2 - ent.x1, ent.y2 - ent.y1).toFixed(3);
       details = `
         <div class="property-row"><span>${t("prop_length")}</span><strong>${len}</strong></div>
-        <div class="property-row"><span>Start (X, Y)</span><strong>${ent.x1.toFixed(2)}, ${ent.y1.toFixed(2)}</strong></div>
-        <div class="property-row"><span>End (X, Y)</span><strong>${ent.x2.toFixed(2)}, ${ent.y2.toFixed(2)}</strong></div>
+        <div class="property-row"><span>Start X</span><input class="prop-input" id="propLineX1" type="number" step="any" value="${ent.x1.toFixed(2)}" /></div>
+        <div class="property-row"><span>Start Y</span><input class="prop-input" id="propLineY1" type="number" step="any" value="${ent.y1.toFixed(2)}" /></div>
+        <div class="property-row"><span>End X</span><input class="prop-input" id="propLineX2" type="number" step="any" value="${ent.x2.toFixed(2)}" /></div>
+        <div class="property-row"><span>End Y</span><input class="prop-input" id="propLineY2" type="number" step="any" value="${ent.y2.toFixed(2)}" /></div>
+      `;
+    } else if (ent.kind === "circle") {
+      const circum = (2 * Math.PI * ent.radius).toFixed(2);
+      const area = (Math.PI * ent.radius * ent.radius).toFixed(2);
+      details = `
+        <div class="property-row"><span>${t("prop_radius")}</span><input class="prop-input" id="propCircleRadius" type="number" step="any" value="${ent.radius.toFixed(3)}" /></div>
+        <div class="property-row"><span>Center X</span><input class="prop-input" id="propCircleCx" type="number" step="any" value="${ent.cx.toFixed(2)}" /></div>
+        <div class="property-row"><span>Center Y</span><input class="prop-input" id="propCircleCy" type="number" step="any" value="${ent.cy.toFixed(2)}" /></div>
+        <div class="property-row"><span>Chu vi (C)</span><strong>${circum}</strong></div>
+        <div class="property-row"><span>Diện tích (S)</span><strong>${area}</strong></div>
+      `;
+    } else if (ent.kind === "text") {
+      details = `
+        <div class="property-row"><span>Text</span><input class="prop-input" id="propTextValue" type="text" value="${escapeHtml(ent.text)}" /></div>
+        <div class="property-row"><span>X</span><input class="prop-input" id="propTextX" type="number" step="any" value="${ent.x.toFixed(2)}" /></div>
+        <div class="property-row"><span>Y</span><input class="prop-input" id="propTextY" type="number" step="any" value="${ent.y.toFixed(2)}" /></div>
+        <div class="property-row"><span>Height</span><input class="prop-input" id="propTextHeight" type="number" step="any" value="${(ent.height || 2.5).toFixed(2)}" /></div>
       `;
     } else if (ent.kind === "arc") {
       details = `
         <div class="property-row"><span>${t("prop_radius")}</span><strong>${ent.radius.toFixed(3)}</strong></div>
         <div class="property-row"><span>${t("prop_center")}</span><strong>${ent.x.toFixed(2)}, ${ent.y.toFixed(2)}</strong></div>
         <div class="property-row"><span>${t("prop_sweep")}</span><strong>${(((ent.end - ent.start + Math.PI*2) % (Math.PI*2)) * 180 / Math.PI).toFixed(1)}°</strong></div>
-      `;
-    } else if (ent.kind === "circle") {
-      const circum = (2 * Math.PI * ent.radius).toFixed(2);
-      const area = (Math.PI * ent.radius * ent.radius).toFixed(2);
-      details = `
-        <div class="property-row"><span>${t("prop_radius")}</span><strong>${ent.radius.toFixed(3)}</strong></div>
-        <div class="property-row"><span>${t("prop_center")}</span><strong>${ent.cx.toFixed(2)}, ${ent.cy.toFixed(2)}</strong></div>
-        <div class="property-row"><span>Chu vi (C)</span><strong>${circum}</strong></div>
-        <div class="property-row"><span>Diện tích (S)</span><strong>${area}</strong></div>
-      `;
-    } else if (ent.kind === "text") {
-      details = `
-        <div class="property-row"><span>Văn bản (Text)</span><strong>"${escapeHtml(ent.text)}"</strong></div>
-        <div class="property-row"><span>Vị trí (X, Y)</span><strong>${ent.x.toFixed(2)}, ${ent.y.toFixed(2)}</strong></div>
-        <div class="property-row"><span>Chiều cao (Height)</span><strong>${ent.height.toFixed(2)}</strong></div>
-        <div class="property-row"><span>Góc xoay</span><strong>${((ent.rotation * 180) / Math.PI).toFixed(1)}°</strong></div>
       `;
     } else if (ent.kind === "polyline") {
       details = `
@@ -1412,6 +1104,47 @@ function renderProperties() {
     $("#propLayerSelect").onchange = (e) => {
       sync(invoke("set_entity_layer", { handle: ent.handle, layer: e.target.value }));
     };
+    if (ent.kind === "line") {
+      const updateLine = () => {
+        const x1 = parseFloat($("#propLineX1").value);
+        const y1 = parseFloat($("#propLineY1").value);
+        const x2 = parseFloat($("#propLineX2").value);
+        const y2 = parseFloat($("#propLineY2").value);
+        if (isFinite(x1) && isFinite(y1) && isFinite(x2) && isFinite(y2)) {
+          sync(invoke("update_line", { handle: ent.handle, x1, y1, x2, y2 }));
+        }
+      };
+      $("#propLineX1").onchange = updateLine;
+      $("#propLineY1").onchange = updateLine;
+      $("#propLineX2").onchange = updateLine;
+      $("#propLineY2").onchange = updateLine;
+    } else if (ent.kind === "circle") {
+      const updateCircle = () => {
+        const r = parseFloat($("#propCircleRadius").value);
+        const cx = parseFloat($("#propCircleCx").value);
+        const cy = parseFloat($("#propCircleCy").value);
+        if (r > 0 && isFinite(cx) && isFinite(cy)) {
+          sync(invoke("update_circle", { handle: ent.handle, cx, cy, radius: r }));
+        }
+      };
+      $("#propCircleRadius").onchange = updateCircle;
+      $("#propCircleCx").onchange = updateCircle;
+      $("#propCircleCy").onchange = updateCircle;
+    } else if (ent.kind === "text") {
+      const updateText = () => {
+        const val = $("#propTextValue").value.trim();
+        const x = parseFloat($("#propTextX").value);
+        const y = parseFloat($("#propTextY").value);
+        const h = parseFloat($("#propTextHeight").value);
+        if (val && isFinite(x) && isFinite(y) && h > 0) {
+          sync(invoke("update_text", { handle: ent.handle, value: val, x, y, height: h, rotation: ent.rotation }));
+        }
+      };
+      $("#propTextValue").onchange = updateText;
+      $("#propTextX").onchange = updateText;
+      $("#propTextY").onchange = updateText;
+      $("#propTextHeight").onchange = updateText;
+    }
     $("#propMoveBtn").onclick = () => chooseTool("move");
     $("#propCopyBtn").onclick = () => chooseTool("copy");
     $("#propEraseBtn").onclick = eraseSelected;
@@ -1955,6 +1688,19 @@ function bindCanvasEvents(viewportEl, canvasEl) {
       } else {
         setStatus("MIRROR · Pick second point of mirror axis");
       }
+    } else if (activeTool === "dim") {
+      points.push(p);
+      if (points.length === 1) {
+        setStatus(currentLang === "vi" ? "DIM · Chọn điểm đo thứ 2" : "DIM · Pick second point");
+      } else if (points.length === 2) {
+        setStatus(currentLang === "vi" ? "DIM · Chọn vị trí đường kích thước (Offset point)" : "DIM · Pick dimension offset");
+      } else if (points.length === 3) {
+        const [p1, p2, pOff] = points;
+        await sync(invoke("add_dimension", { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ox: pOff.x, oy: pOff.y }));
+        points = [];
+        chooseTool("select");
+        setStatus(currentLang === "vi" ? "Đã ghi kích thước (DIM)" : "Dimension created");
+      }
     } else if (activeTool === "dist") {
       points.push(p);
       if (points.length === 2) {
@@ -2170,6 +1916,7 @@ function bindCommandBarEvents() {
           return;
         }
         if (cmd === "O" || cmd === "OFFSET") { chooseTool("offset"); return; }
+                if (cmd === "DLI" || cmd === "DIM" || cmd === "DIMLINEAR" || cmd === "DAL") { chooseTool("dim"); return; }
         if (cmd === "DIST" || cmd === "DI" || cmd === "MEASURE") { chooseTool("dist"); return; }
         if (cmd === "AREA" || cmd === "AA") { chooseTool("area"); return; }
         if (cmd === "GRID") { toggleGrid(); return; }
@@ -2295,3 +2042,13 @@ new ResizeObserver(resize).observe($("#viewport"));
 resize();
 renderRibbon();
 render();
+
+// Background autosave timer (Tuần 31: Drawing robustness)
+setInterval(async () => {
+  if (model && model.dirty) {
+    try {
+      localStorage.setItem("concostcad_autosave_ts", Date.now().toString());
+      setStatus(currentLang === "vi" ? "● Tự động lưu bản sao lưu (Autosaved)" : "● Autosaved drawing snapshot");
+    } catch (_) {}
+  }
+}, 180000);

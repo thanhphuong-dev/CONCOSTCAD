@@ -27,6 +27,7 @@ struct LayerView {
     frozen: bool,
     off: bool,
     locked: bool,
+    color: String,
 }
 
 #[derive(Serialize)]
@@ -146,11 +147,18 @@ fn snapshot(drawing: &DrawingDocument) -> CadSnapshot {
         current_layer: drawing.current_layer().to_owned(),
         layers: drawing
             .layers()
-            .map(|(name, frozen, off, locked)| LayerView {
-                name: name.to_owned(),
-                frozen,
-                off,
-                locked,
+            .map(|(name, frozen, off, locked, rgb)| {
+                let color = match rgb {
+                    Some((r, g, b)) => format!("#{:02x}{:02x}{:02x}", r, g, b),
+                    None => "#79c9dc".to_owned(),
+                };
+                LayerView {
+                    name: name.to_owned(),
+                    frozen,
+                    off,
+                    locked,
+                    color,
+                }
             })
             .collect(),
         entities,
@@ -540,6 +548,44 @@ fn extend_line(
     Ok(snapshot(&drawing))
 }
 
+
+#[tauri::command]
+fn set_layer_color(
+    name: String,
+    hex: String,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    let hex_clean = hex.trim_start_matches('#');
+    if hex_clean.len() == 6 {
+        let r = u8::from_str_radix(&hex_clean[0..2], 16).map_err(|e| e.to_string())?;
+        let g = u8::from_str_radix(&hex_clean[2..4], 16).map_err(|e| e.to_string())?;
+        let b = u8::from_str_radix(&hex_clean[4..6], 16).map_err(|e| e.to_string())?;
+        drawing.set_layer_color(&name, r, g, b)?;
+    }
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn add_dimension(
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    ox: f64,
+    oy: f64,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.add_aligned_dimension(
+        Vector2::new(x1, y1),
+        Vector2::new(x2, y2),
+        Vector2::new(ox, oy),
+        None,
+    )?;
+    Ok(snapshot(&drawing))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -577,6 +623,8 @@ fn main() {
             chamfer_lines,
             trim_line,
             extend_line,
+            set_layer_color,
+            add_dimension,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CONCOSTCAD");

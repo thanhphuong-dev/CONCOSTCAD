@@ -158,13 +158,14 @@ impl DrawingDocument {
         self.cad.get_entity(handle)
     }
 
-    pub fn layers(&self) -> impl Iterator<Item = (&str, bool, bool, bool)> {
+    pub fn layers(&self) -> impl Iterator<Item = (&str, bool, bool, bool, Option<(u8, u8, u8)>)> {
         self.cad.layers.iter().map(|layer| {
             (
                 layer.name.as_str(),
                 layer.flags.frozen,
                 layer.flags.off,
                 layer.flags.locked,
+                layer.color.rgb(),
             )
         })
     }
@@ -318,6 +319,96 @@ impl DrawingDocument {
         }
         self.advance_state();
         Ok(())
+    }
+
+    pub fn set_layer_color(&mut self, name: &str, r: u8, g: u8, b: u8) -> Result<(), String> {
+        self.cad
+            .layers
+            .get(name)
+            .ok_or_else(|| format!("Layer '{name}' does not exist"))?;
+        self.begin_change();
+        if let Some(layer) = self.cad.layers.get_mut(name) {
+            layer.color = acadrust::types::Color::from_rgb(r, g, b);
+        }
+        self.advance_state();
+        Ok(())
+    }
+
+    pub fn add_aligned_dimension(
+        &mut self,
+        p1: Vector2,
+        p2: Vector2,
+        offset_p: Vector2,
+        text_override: Option<&str>,
+    ) -> Result<Vec<Handle>, String> {
+        if !finite2(p1) || !finite2(p2) || !finite2(offset_p) || p1 == p2 {
+            return Err("DIMENSION requires two distinct finite definition points".to_owned());
+        }
+        self.ensure_current_layer_editable()?;
+
+        let dx = p2.x - p1.x;
+        let dy = p2.y - p1.y;
+        let len = dx.hypot(dy);
+        if len < 1e-6 {
+            return Err("Points are too close to dimension".to_owned());
+        }
+
+        let ux = dx / len;
+        let uy = dy / len;
+        let nx = -uy;
+        let ny = ux;
+
+        let h = (offset_p.x - p1.x) * nx + (offset_p.y - p1.y) * ny;
+        let sign = if h >= 0.0 { 1.0 } else { -1.0 };
+        let d1 = Vector2::new(p1.x + h * nx, p1.y + h * ny);
+        let d2 = Vector2::new(p2.x + h * nx, p2.y + h * ny);
+
+        self.begin_change();
+        let mut handles = Vec::new();
+        let layer = self.cad.header.current_layer_name.clone();
+
+        let ext1_s = Vector2::new(p1.x + 0.5 * sign * nx, p1.y + 0.5 * sign * ny);
+        let ext1_e = Vector2::new(d1.x + 1.2 * sign * nx, d1.y + 1.2 * sign * ny);
+        let mut l1 = Line::from_coords(ext1_s.x, ext1_s.y, 0.0, ext1_e.x, ext1_e.y, 0.0);
+        l1.common.layer = layer.clone();
+        handles.push(self.cad.add_entity(EntityType::Line(l1)).map_err(|e| e.to_string())?);
+
+        let ext2_s = Vector2::new(p2.x + 0.5 * sign * nx, p2.y + 0.5 * sign * ny);
+        let ext2_e = Vector2::new(d2.x + 1.2 * sign * nx, d2.y + 1.2 * sign * ny);
+        let mut l2 = Line::from_coords(ext2_s.x, ext2_s.y, 0.0, ext2_e.x, ext2_e.y, 0.0);
+        l2.common.layer = layer.clone();
+        handles.push(self.cad.add_entity(EntityType::Line(l2)).map_err(|e| e.to_string())?);
+
+        let mut dline = Line::from_coords(d1.x, d1.y, 0.0, d2.x, d2.y, 0.0);
+        dline.common.layer = layer.clone();
+        handles.push(self.cad.add_entity(EntityType::Line(dline)).map_err(|e| e.to_string())?);
+
+        let tick_len = 1.2;
+        let tx = (ux + nx) * 0.707 * tick_len;
+        let ty = (uy + ny) * 0.707 * tick_len;
+        let mut t1 = Line::from_coords(d1.x - tx, d1.y - ty, 0.0, d1.x + tx, d1.y + ty, 0.0);
+        t1.common.layer = layer.clone();
+        handles.push(self.cad.add_entity(EntityType::Line(t1)).map_err(|e| e.to_string())?);
+
+        let mut t2 = Line::from_coords(d2.x - tx, d2.y - ty, 0.0, d2.x + tx, d2.y + ty, 0.0);
+        t2.common.layer = layer.clone();
+        handles.push(self.cad.add_entity(EntityType::Line(t2)).map_err(|e| e.to_string())?);
+
+        let val = text_override.map(|s| s.to_owned()).unwrap_or_else(|| format!("{:.2}", len));
+        let mid_x = (d1.x + d2.x) * 0.5 + 0.8 * sign * nx;
+        let mid_y = (d1.y + d2.y) * 0.5 + 0.8 * sign * ny;
+        let mut rot = dy.atan2(dx);
+        if rot > std::f64::consts::FRAC_PI_2 || rot < -std::f64::consts::FRAC_PI_2 {
+            rot = positive_angle(rot + std::f64::consts::PI);
+        }
+        let mut text = Text::with_value(val, Vector3::new(mid_x, mid_y, 0.0));
+        text.height = 2.5;
+        text.rotation = rot;
+        text.common.layer = layer;
+        handles.push(self.cad.add_entity(EntityType::Text(text)).map_err(|e| e.to_string())?);
+
+        self.advance_state();
+        Ok(handles)
     }
 
     pub fn replace_line(
@@ -1900,6 +1991,39 @@ mod tests {
         doc.extend_line(remaining[0], 9.0, 0.0, &[boundary]).unwrap();
         if let Some(EntityType::Line(ext_l)) = doc.cad.get_entity(remaining[0]) {
             assert_eq!(ext_l.end.x, 25.0);
+        }
+    }
+
+    #[test]
+    fn test_layer_color_and_dimension() {
+        let mut doc = DrawingDocument::new();
+        doc.add_layer("DIM_LAYER").unwrap();
+        doc.set_layer_color("DIM_LAYER", 255, 0, 0).unwrap();
+        doc.set_current_layer("DIM_LAYER").unwrap();
+
+        let handles = doc.add_aligned_dimension(
+            Vector2::new(0.0, 0.0),
+            Vector2::new(100.0, 0.0),
+            Vector2::new(50.0, 10.0),
+            None,
+        ).unwrap();
+        assert_eq!(handles.len(), 6); // 2 ext lines + 1 dim line + 2 ticks + 1 text
+        assert_eq!(doc.cad.entities().count(), 6);
+    }
+
+    #[test]
+    fn test_load_corpus_fixtures() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fix1 = manifest_dir.join("fixtures").join("structural_grid_sample.dxf");
+        let fix2 = manifest_dir.join("fixtures").join("mechanical_part_sample.dxf");
+
+        if fix1.exists() {
+            let doc1 = read_cad_file(&fix1, DrawingFormat::Dxf).unwrap();
+            assert_eq!(doc1.entities().count(), 20);
+        }
+        if fix2.exists() {
+            let doc2 = read_cad_file(&fix2, DrawingFormat::Dxf).unwrap();
+            assert_eq!(doc2.entities().count(), 8);
         }
     }
 

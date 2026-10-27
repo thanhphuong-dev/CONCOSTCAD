@@ -934,3 +934,39 @@ button {
     display: none;
   }
 }
+
+.prop-input {
+  height: 22px;
+  background: #171b21;
+  color: #00e5ff;
+  border: 1px solid #3b4450;
+  border-radius: 3px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-family: inherit;
+  max-width: 120px;
+  text-align: right;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.prop-input:focus {
+  border-color: #00e5ff;
+  box-shadow: 0 0 6px rgba(0, 229, 255, 0.35);
+  background: #12151a;
+}
+
+.layer-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.layer-swatch:hover {
+  transform: scale(1.35);
+}
