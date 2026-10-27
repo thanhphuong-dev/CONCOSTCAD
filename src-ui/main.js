@@ -485,6 +485,380 @@ function hitTestEntity(worldPoint, tolerance) {
     const layerObj = model.layers.find((l) => l.name === e.layer);
     if (layerObj && (layerObj.off || layerObj.frozen)) continue;
 
+    let dist = Infinity;
+    if (e.kind === "circle") {
+      const dCenter = Math.hypot(worldPoint.x - e.cx, worldPoint.y - e.cy);
+      if (Math.abs(dCenter - e.radius) <= tolerance) {
+        dist = Math.abs(dCenter - e.radius);
+      }
+    } else if (e.kind === "text") {
+      const estW = (e.text || "").length * (e.height || 2.5) * 0.6;
+      const h = e.height || 2.5;
+      if (worldPoint.x >= e.x - tolerance && worldPoint.x <= e.x + estW + tolerance &&
+          worldPoint.y >= e.y - h - tolerance && worldPoint.y <= e.y + tolerance) {
+        dist = 0;
+      }
+    } else if (e.kind === "insert") {
+      const sx = Math.abs(e.scaleX || 1);
+      const sy = Math.abs(e.scaleY || 1);
+      const boxSize = Math.max(12, 20 * Math.max(sx, sy)) / zoom;
+      const d = Math.hypot(worldPoint.x - e.x, worldPoint.y - e.y);
+      if (d <= Math.max(tolerance, boxSize / 2)) {
+        dist = d;
+      }
+    } else if (e.kind === "line") {
+      dist = pointSegmentDist(worldPoint.x, worldPoint.y, e.x1, e.y1, e.x2, e.y2);
+    } else if (e.kind === "arc") {
+      const dCenter = Math.hypot(worldPoint.x - e.x, worldPoint.y - e.y);
+      const angle = Math.atan2(worldPoint.y - e.y, worldPoint.x - e.x);
+      if (Math.abs(dCenter - e.radius) <= tolerance && isAngleBetween(angle, e.start, e.end)) {
+        dist = Math.abs(dCenter - e.radius);
+      }
+    } else if (e.kind === "polyline") {
+      const pts = e.points;
+      const n = e.closed ? pts.length : pts.length - 1;
+      for (let i = 0; i < n; i++) {
+        const a = pts[i];
+        const b = pts[(i + 1) % pts.length];
+        const bulge = a.bulge || 0;
+        if (Math.abs(bulge) >= 1e-6) {
+          const geom = bulgeGeometry(a, b, bulge);
+          if (geom) {
+            const dCenter = Math.hypot(worldPoint.x - geom.center.x, worldPoint.y - geom.center.y);
+            const angle = Math.atan2(worldPoint.y - geom.center.y, worldPoint.x - geom.center.x);
+            const endAngle = geom.startAngle + geom.sweep;
+            if (Math.abs(dCenter - geom.radius) <= tolerance) {
+              const startA = geom.sweep > 0 ? geom.startAngle : endAngle;
+              const endA = geom.sweep > 0 ? endAngle : geom.startAngle;
+              if (isAngleBetween(angle, startA, endA)) {
+                dist = Math.min(dist, Math.abs(dCenter - geom.radius));
+              }
+            }
+          }
+        } else {
+          dist = Math.min(dist, pointSegmentDist(worldPoint.x, worldPoint.y, a.x, a.y, b.x, b.y));
+        }
+      }
+    }
+
+    if (dist < minDistance) {
+      minDistance = dist;
+      closest = e;
+    }
+  }
+
+  return closest;
+}
+
+// Bounding Box computation for entities (for Culling and Box Selection)
+function getEntityBounds(e) {
+  if (e.kind === "line") {
+    return {
+      minX: Math.min(e.x1, e.x2),
+      maxX: Math.max(e.x1, e.x2),
+      minY: Math.min(e.y1, e.y2),
+      maxY: Math.max(e.y1, e.y2)
+    };
+  }
+  if (e.kind === "circle") {
+    return {
+      minX: e.cx - e.radius,
+      maxX: e.cx + e.radius,
+      minY: e.cy - e.radius,
+      maxY: e.cy + e.radius
+    };
+  }
+  if (e.kind === "text") {
+    const estW = (e.text || "").length * (e.height || 2.5) * 0.6;
+    return {
+      minX: e.x,
+      maxX: e.x + estW,
+      minY: e.y - (e.height || 2.5),
+      maxY: e.y
+    };
+  }
+  if (e.kind === "insert") {
+    const s = 15 / zoom;
+    return {
+      minX: e.x - s,
+      maxX: e.x + s,
+      minY: e.y - s,
+      maxY: e.y + s
+    };
+  }
+  if (e.kind === "arc") {
+    return {
+      minX: e.x - e.radius,
+      maxX: e.x + e.radius,
+      minY: e.y - e.radius,
+      maxY: e.y + e.radius
+    };
+  }
+  if (e.kind === "polyline") {
+    const xs = e.points.map((p) => p.x);
+    const ys = e.points.map((p) => p.y);
+    return {
+      minX: Math.min(...xs),
+      maxX: Math.max(...xs),
+      minY: Math.min(...ys),
+      maxY: Math.max(...ys)
+    };
+  }
+  return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+}
+
+// Window & Crossing Selection Query
+function queryEntitiesInBox(p1, p2) {
+  const isWindow = p2.x >= p1.x; // Left-to-Right = Window, Right-to-Left = Crossing
+  const boxMinX = Math.min(p1.x, p2.x);
+  const boxMaxX = Math.max(p1.x, p2.x);
+  const boxMinY = Math.min(p1.y, p2.y);
+  const boxMaxY = Math.max(p1.y, p2.y);
+
+  const matched = [];
+
+  for (const e of model.entities) {
+    const layerObj = model.layers.find((l) => l.name === e.layer);
+    if (layerObj && (layerObj.off || layerObj.frozen)) continue;
+
+    const b = getEntityBounds(e);
+
+    if (isWindow) {
+      // Must be completely inside
+      if (b.minX >= boxMinX && b.maxX <= boxMaxX && b.minY >= boxMinY && b.maxY <= boxMaxY) {
+        matched.push(e.handle);
+      }
+    } else {
+      // Crossing: Bounding box intersects
+      const intersects = !(b.maxX < boxMinX || b.minX > boxMaxX || b.maxY < boxMinY || b.minY > boxMaxY);
+      if (intersects) {
+        matched.push(e.handle);
+      }
+    }
+  }
+
+  return matched;
+}
+
+// Grip Hit-Testing Helper
+function findNearestGrip(worldPoint, pixelTol = 8) {
+  if (selectedHandles.size !== 1) return null;
+  const tol = pixelTol / zoom;
+  const handle = Array.from(selectedHandles)[0];
+  const ent = model.entities.find((e) => e.handle === handle);
+  if (!ent) return null;
+
+  if (ent.kind === "line") {
+    if (Math.hypot(worldPoint.x - ent.x1, worldPoint.y - ent.y1) <= tol) return { handle, kind: "line", id: "start", pt: { x: ent.x1, y: ent.y1 } };
+    if (Math.hypot(worldPoint.x - ent.x2, worldPoint.y - ent.y2) <= tol) return { handle, kind: "line", id: "end", pt: { x: ent.x2, y: ent.y2 } };
+    const mx = (ent.x1 + ent.x2) / 2, my = (ent.y1 + ent.y2) / 2;
+    if (Math.hypot(worldPoint.x - mx, worldPoint.y - my) <= tol) return { handle, kind: "line", id: "mid", pt: { x: mx, y: my } };
+  } else if (ent.kind === "circle") {
+    if (Math.hypot(worldPoint.x - ent.cx, worldPoint.y - ent.cy) <= tol) return { handle, kind: "circle", id: "center", pt: { x: ent.cx, y: ent.cy } };
+    if (Math.hypot(worldPoint.x - (ent.cx + ent.radius), worldPoint.y - ent.cy) <= tol) return { handle, kind: "circle", id: "quad_e", pt: { x: ent.cx + ent.radius, y: ent.cy } };
+    if (Math.hypot(worldPoint.x - (ent.cx - ent.radius), worldPoint.y - ent.cy) <= tol) return { handle, kind: "circle", id: "quad_w", pt: { x: ent.cx - ent.radius, y: ent.cy } };
+    if (Math.hypot(worldPoint.x - ent.cx, worldPoint.y - (ent.cy + ent.radius)) <= tol) return { handle, kind: "circle", id: "quad_n", pt: { x: ent.cx, y: ent.cy + ent.radius } };
+    if (Math.hypot(worldPoint.x - ent.cx, worldPoint.y - (ent.cy - ent.radius)) <= tol) return { handle, kind: "circle", id: "quad_s", pt: { x: ent.cx, y: ent.cy - ent.radius } };
+  } else if (ent.kind === "text") {
+    if (Math.hypot(worldPoint.x - ent.x, worldPoint.y - ent.y) <= tol) return { handle, kind: "text", id: "pos", pt: { x: ent.x, y: ent.y } };
+  } else if (ent.kind === "insert") {
+    if (Math.hypot(worldPoint.x - ent.x, worldPoint.y - ent.y) <= tol) return { handle, kind: "insert", id: "insert_pt", pt: { x: ent.x, y: ent.y } };
+  } else if (ent.kind === "arc") {
+    if (Math.hypot(worldPoint.x - ent.x, worldPoint.y - ent.y) <= tol) return { handle, kind: "arc", id: "center", pt: { x: ent.x, y: ent.y } };
+    const sx = ent.x + ent.radius * Math.cos(ent.start), sy = ent.y + ent.radius * Math.sin(ent.start);
+    if (Math.hypot(worldPoint.x - sx, worldPoint.y - sy) <= tol) return { handle, kind: "arc", id: "start", pt: { x: sx, y: sy } };
+    const ex = ent.x + ent.radius * Math.cos(ent.end), ey = ent.y + ent.radius * Math.sin(ent.end);
+    if (Math.hypot(worldPoint.x - ex, worldPoint.y - ey) <= tol) return { handle, kind: "arc", id: "end", pt: { x: ex, y: ey } };
+  } else if (ent.kind === "polyline") {
+    for (let i = 0; i < ent.points.length; i++) {
+      const p = ent.points[i];
+      if (Math.hypot(worldPoint.x - p.x, worldPoint.y - p.y) <= tol) return { handle, kind: "polyline", id: i, pt: { x: p.x, y: p.y } };
+    }
+  }
+  return null;
+}
+
+// Snap Detection
+function findNearestSnap(p, pixelRadius = 14) {
+  if (!snapEnabled) return null;
+  const tol = pixelRadius / zoom;
+  let best = null;
+  let bestDist = tol;
+
+  const consider = (pt, kind) => {
+    const d = Math.hypot(p.x - pt.x, p.y - pt.y);
+    if (d < bestDist) {
+      bestDist = d;
+      best = { point: pt, kind };
+    }
+  };
+
+  for (const e of model.entities) {
+    const layerObj = model.layers.find((l) => l.name === e.layer);
+    if (layerObj && (layerObj.off || layerObj.frozen)) continue;
+
+    if (e.kind === "line") {
+      consider({ x: e.x1, y: e.y1 }, "endpoint");
+      consider({ x: e.x2, y: e.y2 }, "endpoint");
+      consider({ x: (e.x1 + e.x2) / 2, y: (e.y1 + e.y2) / 2 }, "midpoint");
+    } else if (e.kind === "arc") {
+      consider({ x: e.x, y: e.y }, "center");
+      consider({ x: e.x + e.radius * Math.cos(e.start), y: e.y + e.radius * Math.sin(e.start) }, "endpoint");
+      consider({ x: e.x + e.radius * Math.cos(e.end), y: e.y + e.radius * Math.sin(e.end) }, "endpoint");
+    } else if (e.kind === "circle") {
+      consider({ x: e.cx, y: e.cy }, "center");
+      consider({ x: e.cx + e.radius, y: e.cy }, "endpoint");
+      consider({ x: e.cx - e.radius, y: e.cy }, "endpoint");
+      consider({ x: e.cx, y: e.cy + e.radius }, "endpoint");
+      consider({ x: e.cx, y: e.cy - e.radius }, "endpoint");
+    } else if (e.kind === "insert" || e.kind === "text") {
+      consider({ x: e.x, y: e.y }, "endpoint");
+    } else if (e.kind === "polyline") {
+      for (let i = 0; i < e.points.length; i++) {
+        consider(e.points[i], "endpoint");
+        if (i < e.points.length - 1 || e.closed) {
+          const next = e.points[(i + 1) % e.points.length];
+          consider({ x: (e.points[i].x + next.x) / 2, y: (e.points[i].y + next.y) / 2 }, "midpoint");
+        }
+      }
+    }
+  }
+
+  return best;
+}
+
+// Canvas Drawing Routines
+function resize() {
+  const canvas = $("#cadCanvas");
+  const viewport = $("#viewport");
+  if (!canvas || !viewport) return;
+  const r = viewport.getBoundingClientRect();
+  const d = window.devicePixelRatio || 1;
+  canvas.width = r.width * d;
+  canvas.height = r.height * d;
+  canvas.style.width = r.width + "px";
+  canvas.style.height = r.height + "px";
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(d, 0, 0, d, 0, 0);
+  draw();
+}
+
+function drawPolyline(pts, closed, isSelected, layerColor = "#79c9dc") {
+  const canvas = $("#cadCanvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!pts || !pts.length) return;
+  ctx.beginPath();
+  const first = worldToScreen(pts[0].x, pts[0].y);
+  ctx.moveTo(first.x, first.y);
+  const n = closed ? pts.length : pts.length - 1;
+
+  for (let i = 0; i < n; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
+    const bulge = a.bulge || 0;
+    if (Math.abs(bulge) >= 1e-6) {
+      const geom = bulgeGeometry(a, b, bulge);
+      if (geom) {
+        const steps = Math.max(8, Math.ceil(Math.abs(geom.sweep) * geom.radius * zoom / 10));
+        for (let s = 1; s <= steps; s++) {
+          const angle = geom.startAngle + (geom.sweep * s) / steps;
+          const p = worldToScreen(
+            geom.center.x + geom.radius * Math.cos(angle),
+            geom.center.y + geom.radius * Math.sin(angle)
+          );
+          ctx.lineTo(p.x, p.y);
+        }
+        continue;
+      }
+    }
+    const screenB = worldToScreen(b.x, b.y);
+    ctx.lineTo(screenB.x, screenB.y);
+  }
+
+  if (closed) ctx.closePath();
+  ctx.stroke();
+}
+
+function drawGrip(worldX, worldY) {
+  const canvas = $("#cadCanvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const s = worldToScreen(worldX, worldY);
+  ctx.fillStyle = "#00e5ff";
+  ctx.fillRect(s.x - 3.5, s.y - 3.5, 7, 7);
+  ctx.strokeStyle = "#004753";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(s.x - 3.5, s.y - 3.5, 7, 7);
+}
+
+function draw() {
+  const canvas = $("#cadCanvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const d = window.devicePixelRatio || 1;
+  const w = canvas.width / d;
+  const h = canvas.height / d;
+  ctx.setTransform(d, 0, 0, d, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#101318";
+  ctx.fillRect(0, 0, w, h);
+
+  // Draw Grid
+  if (showGrid) {
+    const step = 50 * zoom;
+    const base = worldToScreen(0, 0);
+    const gridStep = step < 12 ? step * 5 : step;
+    if (gridStep > 3 && gridStep < 400) {
+      ctx.beginPath();
+      ctx.strokeStyle = "#1b2027";
+      ctx.lineWidth = 1;
+      let ox = ((base.x % gridStep) + gridStep) % gridStep;
+      let oy = ((base.y % gridStep) + gridStep) % gridStep;
+      for (let x = ox; x < w; x += gridStep) {
+        ctx.moveTo(Math.round(x) + 0.5, 0);
+        ctx.lineTo(Math.round(x) + 0.5, h);
+      }
+      for (let y = oy; y < h; y += gridStep) {
+        ctx.moveTo(0, Math.round(y) + 0.5);
+        ctx.lineTo(w, Math.round(y) + 0.5);
+      }
+      ctx.stroke();
+    }
+
+    // Origin Axes
+    ctx.strokeStyle = "#2e3b4a";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(0, Math.round(base.y) + 0.5);
+    ctx.lineTo(w, Math.round(base.y) + 0.5);
+    ctx.moveTo(Math.round(base.x) + 0.5, 0);
+    ctx.lineTo(Math.round(base.x) + 0.5, h);
+    ctx.stroke();
+  }
+
+  // Viewport Bounding Box in World Coordinates for Spatial Culling (Tuần 33 Optimization)
+  const vpTopLeft = screenToWorld(0, 0);
+  const vpBottomRight = screenToWorld(w, h);
+  const vpMinX = Math.min(vpTopLeft.x, vpBottomRight.x);
+  const vpMaxX = Math.max(vpTopLeft.x, vpBottomRight.x);
+  const vpMinY = Math.min(vpTopLeft.y, vpBottomRight.y);
+  const vpMaxY = Math.max(vpTopLeft.y, vpBottomRight.y);
+
+  // Draw Entities
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  for (const e of model.entities) {
+    const layerObj = model.layers.find((l) => l.name === e.layer);
+    if (layerObj && (layerObj.off || layerObj.frozen)) continue;
+
+    // Viewport Culling Check
+    const b = getEntityBounds(e);
+    if (b.maxX < vpMinX || b.minX > vpMaxX || b.maxY < vpMinY || b.minY > vpMaxY) {
+      continue;
+    }
+
     const isSelected = selectedHandles.has(e.handle);
     const layerColor = layerObj && layerObj.color ? layerObj.color : "#79c9dc";
     if (isSelected) {
@@ -559,6 +933,29 @@ function hitTestEntity(worldPoint, tolerance) {
       if (isSelected) {
         drawGrip(e.x, e.y);
       }
+    } else if (e.kind === "insert") {
+      // Block Reference (INSERT) CAD marker and label
+      const p = worldToScreen(e.x, e.y);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(-e.rotation);
+      const markerSize = Math.max(7, Math.min(24, 10 * Math.max(0.5, e.scaleX || 1)));
+      ctx.strokeStyle = isSelected ? "#00e5ff" : (layerColor || "#ffaa00");
+      ctx.lineWidth = isSelected ? 2 : 1.3;
+      ctx.beginPath();
+      ctx.moveTo(-markerSize, -markerSize);
+      ctx.lineTo(markerSize, markerSize);
+      ctx.moveTo(-markerSize, markerSize);
+      ctx.lineTo(markerSize, -markerSize);
+      ctx.stroke();
+      ctx.strokeRect(-markerSize, -markerSize, markerSize * 2, markerSize * 2);
+      ctx.font = "11px 'Inter', sans-serif";
+      ctx.fillStyle = isSelected ? "#00e5ff" : "#94a3b8";
+      ctx.fillText(`[${e.blockName}]`, markerSize + 4, 4);
+      ctx.restore();
+      if (isSelected) {
+        drawGrip(e.x, e.y);
+      }
     } else if (e.kind === "polyline") {
       drawPolyline(e.points, e.closed, isSelected, layerColor);
       if (isSelected) {
@@ -568,7 +965,6 @@ function hitTestEntity(worldPoint, tolerance) {
   }
   ctx.shadowColor = "transparent";
   ctx.shadowBlur = 0;
-
 
   // Draw Window / Crossing Selection Box
   if (isBoxSelecting && boxStart && boxCurrent) {
@@ -581,7 +977,6 @@ function hitTestEntity(worldPoint, tolerance) {
 
     const isWindow = boxCurrent.x >= boxStart.x;
     if (isWindow) {
-      // Window: Blue, solid border
       ctx.fillStyle = "rgba(23, 100, 200, 0.18)";
       ctx.fillRect(bx, by, bw, bh);
       ctx.strokeStyle = "#1e88e5";
@@ -589,7 +984,6 @@ function hitTestEntity(worldPoint, tolerance) {
       ctx.setLineDash([]);
       ctx.strokeRect(bx, by, bw, bh);
     } else {
-      // Crossing: Green, dashed border
       ctx.fillStyle = "rgba(46, 175, 80, 0.18)";
       ctx.fillRect(bx, by, bw, bh);
       ctx.strokeStyle = "#43a047";
@@ -635,6 +1029,11 @@ function hitTestEntity(worldPoint, tolerance) {
           i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y);
         }
         ctx.stroke();
+      } else if (e.kind === "circle") {
+        const c = worldToScreen(e.cx + dx, e.cy + dy);
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, e.radius * zoom, 0, Math.PI * 2);
+        ctx.stroke();
       } else if (e.kind === "polyline") {
         const movedPts = e.points.map((pt) => ({ x: pt.x + dx, y: pt.y + dy, bulge: pt.bulge }));
         drawPolyline(movedPts, e.closed, false);
@@ -643,10 +1042,10 @@ function hitTestEntity(worldPoint, tolerance) {
     ctx.setLineDash([]);
   }
 
-  // Draw Dynamic Creation Previews
-  if (points.length) {
-    ctx.strokeStyle = "#e7b866";
-    ctx.lineWidth = 1.5;
+  // Active Tool Rubber-Band Preview
+  if (points.length > 0 && activeTool !== "select") {
+    ctx.strokeStyle = "#e2ad5e";
+    ctx.lineWidth = 1.4;
     ctx.setLineDash([5, 4]);
     ctx.beginPath();
 
@@ -716,6 +1115,54 @@ function hitTestEntity(worldPoint, tolerance) {
   if (coordEl) coordEl.innerHTML = `X&nbsp; ${world.x.toFixed(3)}&nbsp;&nbsp; Y&nbsp; ${world.y.toFixed(3)}`;
   const zoomEl = $("#zoomReadout");
   if (zoomEl) zoomEl.textContent = `${Math.round(zoom * 100)}%`;
+}
+
+// Zoom Selected Entities (ZS / ZOOM OBJECT)
+function zoomSelected() {
+  if (!selectedHandles.size) {
+    zoomToExtents();
+    return;
+  }
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const h of selectedHandles) {
+    const ent = model.entities.find((e) => e.handle === h);
+    if (!ent) continue;
+    const b = getEntityBounds(ent);
+    minX = Math.min(minX, b.minX);
+    maxX = Math.max(maxX, b.maxX);
+    minY = Math.min(minY, b.minY);
+    maxY = Math.max(maxY, b.maxY);
+  }
+  if (!isFinite(minX)) return;
+  const viewport = $("#viewport");
+  const w = viewport.clientWidth, h = viewport.clientHeight, pad = 80;
+  pan = { x: 0, y: 0 };
+  const spanX = Math.max(1, maxX - minX);
+  const spanY = Math.max(1, maxY - minY);
+  zoom = Math.min((w - pad * 2) / spanX, (h - pad * 2) / spanY);
+  pan.x = -((minX + maxX) / 2) * zoom;
+  pan.y = ((minY + maxY) / 2) * zoom;
+  draw();
+  setStatus(currentLang === "vi" ? "Đã phóng to đối tượng đã chọn (ZOOM OBJECT)" : "Zoomed to selected object(s)");
+}
+
+// Export Drawing to High-Res PNG Image (Tuần 35 Plot / Export)
+function exportDrawingImage() {
+  const canvas = $("#cadCanvas");
+  if (!canvas) return;
+  try {
+    const dataUrl = canvas.toDataURL("image/png");
+    const link = document.createElement("a");
+    const title = (model.title || "Drawing").replace(/[^a-zA-Z0-9_-]/g, "_");
+    link.download = `${title}_plot.png`;
+    link.href = dataUrl;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setStatus(currentLang === "vi" ? "Đã xuất bản vẽ sang tệp ảnh PNG (PLOT/EXPORT)" : "Drawing exported to PNG");
+  } catch (err) {
+    setStatus("Export failed: " + err);
+  }
 }
 
 // Ribbon Tabs Definition & Rendering
@@ -1075,6 +1522,15 @@ function renderProperties() {
         <div class="property-row"><span>${t("prop_radius")}</span><strong>${ent.radius.toFixed(3)}</strong></div>
         <div class="property-row"><span>${t("prop_center")}</span><strong>${ent.x.toFixed(2)}, ${ent.y.toFixed(2)}</strong></div>
         <div class="property-row"><span>${t("prop_sweep")}</span><strong>${(((ent.end - ent.start + Math.PI*2) % (Math.PI*2)) * 180 / Math.PI).toFixed(1)}°</strong></div>
+      `;
+    } else if (ent.kind === "insert") {
+      details = `
+        <div class="property-row"><span>Block Name</span><strong>${escapeHtml(ent.blockName)}</strong></div>
+        <div class="property-row"><span>Insert X</span><strong>${ent.x.toFixed(2)}</strong></div>
+        <div class="property-row"><span>Insert Y</span><strong>${ent.y.toFixed(2)}</strong></div>
+        <div class="property-row"><span>Scale X</span><strong>${(ent.scaleX || 1).toFixed(2)}</strong></div>
+        <div class="property-row"><span>Scale Y</span><strong>${(ent.scaleY || 1).toFixed(2)}</strong></div>
+        <div class="property-row"><span>Rotation</span><strong>${((ent.rotation * 180 / Math.PI) % 360).toFixed(1)}°</strong></div>
       `;
     } else if (ent.kind === "polyline") {
       details = `
@@ -1896,6 +2352,8 @@ function bindCommandBarEvents() {
 
         const cmd = raw.toUpperCase();
         if (cmd === "ZE" || cmd === "ZOOM EXTENTS") { zoomToExtents(); return; }
+    if (cmd === "ZS" || cmd === "ZOOM SELECTED" || cmd === "ZOOM OBJECT") { zoomSelected(); return; }
+    if (cmd === "EXPORT" || cmd === "PLOT" || cmd === "PRINT") { exportDrawingImage(); return; }
         if (cmd === "U" || cmd === "UNDO") { undoAction(); return; }
         if (cmd === "REDO") { redoAction(); return; }
         if (cmd === "E" || cmd === "ERASE" || cmd === "DELETE") { eraseSelected(); return; }

@@ -1,4 +1,4 @@
-use crate::geometry::{angle_in_arc, line_circle_intersections, line_line_intersection, positive_angle};
+use crate::geometry::{line_circle_intersections, line_line_intersection, positive_angle};
 use acadrust::entities::{Arc, Circle, EntityType, Line, LwPolyline, LwVertex, Text};
 use acadrust::tables::Layer;
 use acadrust::types::{Handle, Vector2, Vector3};
@@ -1307,6 +1307,11 @@ impl DrawingDocument {
                         text.insertion_point = Vector3::new(p.x, p.y, text.insertion_point.z);
                         text.rotation = positive_angle(text.rotation + angle_rad);
                     }
+                    EntityType::Insert(insert) => {
+                        let p = rotate_vector2(Vector2::new(insert.insert_point.x, insert.insert_point.y), center, cos_a, sin_a);
+                        insert.insert_point = Vector3::new(p.x, p.y, insert.insert_point.z);
+                        insert.rotation = positive_angle(insert.rotation + angle_rad);
+                    }
                     _ => {}
                 }
             }
@@ -1383,6 +1388,12 @@ impl DrawingDocument {
                         text.insertion_point = Vector3::new(p.x, p.y, text.insertion_point.z);
                         let mirror_axis = (p2.y - p1.y).atan2(p2.x - p1.x);
                         text.rotation = positive_angle(2.0 * mirror_axis - text.rotation);
+                    }
+                    EntityType::Insert(insert) => {
+                        let p = mirror_vector2(Vector2::new(insert.insert_point.x, insert.insert_point.y), p1, p2);
+                        insert.insert_point = Vector3::new(p.x, p.y, insert.insert_point.z);
+                        let mirror_axis = (p2.y - p1.y).atan2(p2.x - p1.x);
+                        insert.rotation = positive_angle(2.0 * mirror_axis - insert.rotation);
                     }
                     _ => {}
                 }
@@ -2043,5 +2054,26 @@ mod tests {
             assert_eq!(reopened.entities().count(), 2);
             let _ = fs::remove_file(test_dwg);
         }
+    }
+    #[test]
+    fn test_large_corpus_stress_benchmark() {
+        let mut doc = DrawingDocument::new();
+        // Generate 1,000 lines and 1,000 circles (2,000 entities)
+        for i in 0..1000 {
+            let offset = i as f64 * 2.0;
+            let _ = doc.add_line(Vector2::new(offset, 0.0), Vector2::new(offset, 100.0)).unwrap();
+            let _ = doc.add_circle(Vector2::new(offset, 50.0), 1.0).unwrap();
+        }
+        assert_eq!(doc.cad.entities().count(), 2000);
+
+        // Perform batch transform on all 2,000 entities
+        let handles: Vec<_> = doc.cad.entities().map(|e| e.common().handle).collect();
+        let rotated = doc.rotate_many(&handles, 0.0, 0.0, std::f64::consts::PI / 4.0);
+        assert!(rotated.is_ok());
+        assert_eq!(doc.cad.entities().count(), 2000);
+
+        // Verify transaction rollback / undo operates cleanly under large batch
+        assert!(doc.undo());
+        assert_eq!(doc.cad.entities().count(), 2000);
     }
 }

@@ -72,6 +72,16 @@ enum EntityView {
         height: f64,
         rotation: f64,
     },
+    Insert {
+        handle: u64,
+        layer: String,
+        block_name: String,
+        x: f64,
+        y: f64,
+        scale_x: f64,
+        scale_y: f64,
+        rotation: f64,
+    },
 }
 
 #[derive(Serialize)]
@@ -121,6 +131,16 @@ fn snapshot(drawing: &DrawingDocument) -> CadSnapshot {
                     y: text.insertion_point.y,
                     height: text.height,
                     rotation: text.rotation,
+                }),
+                EntityType::Insert(insert) => Some(EntityView::Insert {
+                    handle,
+                    layer,
+                    block_name: insert.block_name.clone(),
+                    x: insert.insert_point.x,
+                    y: insert.insert_point.y,
+                    scale_x: insert.x_scale(),
+                    scale_y: insert.y_scale(),
+                    rotation: insert.rotation,
                 }),
                 EntityType::LwPolyline(poly) => Some(EntityView::Polyline {
                     handle,
