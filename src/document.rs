@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::geometry::{line_circle_intersections, line_line_intersection, positive_angle};
 use acadrust::entities::{Arc, Circle, EntityType, Line, LwPolyline, LwVertex, Text};
 use acadrust::tables::Layer;

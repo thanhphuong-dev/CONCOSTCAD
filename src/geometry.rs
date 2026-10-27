@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use acadrust::types::Vector2;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

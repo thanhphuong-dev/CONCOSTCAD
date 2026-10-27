@@ -1,0 +1,35 @@
+name: CI Windows Build & Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Frontend Dependencies
+        run: npm install
+
+      - name: Build Frontend (Vite)
+        run: npm run build
+
+      - name: Run Cargo Test Suite (10 Automated Tests)
+        run: cargo test --verbose
+
+      - name: Check Rust Code Quality
+        run: cargo check --verbose
