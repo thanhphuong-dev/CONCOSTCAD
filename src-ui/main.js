@@ -106,6 +106,9 @@ const i18n = {
     tool_poly: "Polyline",
     tool_circle: "Circle",
     tool_rect: "Rectangle",
+    tool_spline: "Spline Curve",
+    tool_revcloud: "Revision Cloud",
+    tool_hatch: "Hatch Pattern",
     tool_text: "Text",
     tool_join: "Join",
     tool_fillet: "Fillet",
@@ -414,6 +417,71 @@ let showGrid = true;
 let lastTool = "line";
 let filletRadius = 0;
 let chamferDist = 5;
+let dimPrecision = 2;
+let dimSuffix = "";
+
+// Catmull-Rom Spline Interpolation for smooth CAD curves
+function interpolateCatmullRom(pts, numSamples = 10) {
+  if (pts.length < 2) return pts.map((p) => [p.x, p.y, 0]);
+  if (pts.length === 2) return [[pts[0].x, pts[0].y, 0], [pts[1].x, pts[1].y, 0]];
+
+  const res = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = i === 0 ? pts[0] : pts[i - 1];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = i + 2 < pts.length ? pts[i + 2] : p2;
+
+    for (let t = 0; t < numSamples; t++) {
+      const u = t / numSamples;
+      const u2 = u * u;
+      const u3 = u2 * u;
+
+      const x = 0.5 * (
+        (2 * p1.x) +
+        (-p0.x + p2.x) * u +
+        (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * u2 +
+        (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * u3
+      );
+      const y = 0.5 * (
+        (2 * p1.y) +
+        (-p0.y + p2.y) * u +
+        (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * u2 +
+        (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * u3
+      );
+      res.push([x, y, 0]);
+    }
+  }
+  res.push([pts[pts.length - 1].x, pts[pts.length - 1].y, 0]);
+  return res;
+}
+
+// AutoCAD Revision Cloud Arc Subdivider
+function generateRevisionCloud(corners, arcLength = 22) {
+  if (corners.length < 2) return [];
+  const vertices = [];
+  const n = corners.length;
+
+  for (let i = 0; i < n; i++) {
+    const c1 = corners[i];
+    const c2 = corners[(i + 1) % n];
+    const dx = c2.x - c1.x;
+    const dy = c2.y - c1.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 1e-4) continue;
+
+    const numArcs = Math.max(1, Math.round(dist / arcLength));
+    const step = 1 / numArcs;
+
+    for (let a = 0; a < numArcs; a++) {
+      const t = a * step;
+      const px = c1.x + t * dx;
+      const py = c1.y + t * dy;
+      vertices.push([px, py, 0.52]); // 0.52 bulge produces convex arcs
+    }
+  }
+  return vertices;
+}
 const setStatus = (s) => {
   const el = $("#status");
   if (el) el.textContent = s;
@@ -1049,7 +1117,25 @@ function draw() {
     ctx.setLineDash([5, 4]);
     ctx.beginPath();
 
-    if (activeTool === "circle" && points.length === 1) {
+    if (activeTool === "spline" && points.length > 0) {
+      const allPts = [...points, world];
+      const smooth = interpolateCatmullRom(allPts, 10);
+      if (smooth.length > 1) {
+        const s0 = worldToScreen(smooth[0][0], smooth[0][1]);
+        ctx.moveTo(s0.x, s0.y);
+        for (let i = 1; i < smooth.length; i++) {
+          const pt = worldToScreen(smooth[i][0], smooth[i][1]);
+          ctx.lineTo(pt.x, pt.y);
+        }
+        ctx.stroke();
+      }
+    } else if (activeTool === "revcloud" && points.length > 1) {
+      const allPts = [...points, world];
+      const cloud = generateRevisionCloud(allPts, 25);
+      if (cloud.length > 1) {
+        drawPolyline(cloud.map(v => ({ x: v[0], y: v[1], bulge: v[2] })), true, false);
+      }
+    } else if (activeTool === "circle" && points.length === 1) {
       const r = Math.hypot(world.x - points[0].x, world.y - points[0].y);
       const c = worldToScreen(points[0].x, points[0].y);
       ctx.arc(c.x, c.y, r * zoom, 0, Math.PI * 2);
@@ -1179,6 +1265,9 @@ function renderRibbon() {
           <button class="tool-button ${activeTool==='polyline'?'selected':''}" data-tool="polyline"><span class="tool-icon">⌁</span><span>${t("tool_poly")}</span></button>
           <button class="tool-button ${activeTool==='circle'?'selected':''}" data-tool="circle"><span class="tool-icon">◯</span><span>${t("tool_circle")}</span></button>
           <button class="tool-button ${activeTool==='rectangle'?'selected':''}" data-tool="rectangle"><span class="tool-icon">▭</span><span>${t("tool_rect")}</span></button>
+          <button class="tool-button ${activeTool==='spline'?'selected':''}" data-tool="spline" title="Vẽ đường cong Spline (SPL)"><span class="tool-icon">〰</span><span>${t("tool_spline")}</span></button>
+          <button class="tool-button ${activeTool==='revcloud'?'selected':''}" data-tool="revcloud" title="Đám mây ghi chú (REVCLOUD)"><span class="tool-icon">☁</span><span>${t("tool_revcloud")}</span></button>
+          <button class="tool-button ${activeTool==='hatch'?'selected':''}" data-tool="hatch" title="Tô mẫu mặt cắt (HATCH)"><span class="tool-icon">▨</span><span>${t("tool_hatch")}</span></button>
           <button class="tool-button ${activeTool==='text'?'selected':''}" data-tool="text"><span class="tool-icon">T</span><span>${t("tool_text")}</span></button>
         </div>
         <div class="group-caption">${t("grp_draw")}</div>
@@ -1408,7 +1497,10 @@ function chooseTool(tool) {
     chamfer: currentLang === "vi" ? "CHAMFER · Chọn đường 1 rồi chọn đường 2 để vát mép" : "CHAMFER · Pick first line then second line",
     trim: currentLang === "vi" ? "TRIM · Nhấp đoạn thẳng cần cắt xén" : "TRIM · Click segment to trim",
     extend: currentLang === "vi" ? "EXTEND · Nhấp đầu mút cần kéo dài đến biên" : "EXTEND · Click end to extend to boundary",
-    join: currentLang === "vi" ? "JOIN · Chọn các đoạn thẳng/cung nối tiếp nhau để gộp thành Polyline" : "JOIN · Select contiguous entities to join"
+    join: currentLang === "vi" ? "JOIN · Chọn các đoạn thẳng/cung nối tiếp nhau để gộp thành Polyline" : "JOIN · Select contiguous entities to join",
+    spline: currentLang === "vi" ? "SPLINE · Nhấp chọn các điểm điều khiển; nhấn Enter để hoàn tất đường cong" : "SPLINE · Pick fit points; Enter to finish curve",
+    revcloud: currentLang === "vi" ? "REVCLOUD · Nhấp các điểm mốc tạo biên dạng; nhấn Enter để đóng đám mây ghi chú" : "REVCLOUD · Pick vertices; Enter to close revision cloud",
+    hatch: currentLang === "vi" ? "HATCH · Nhấp vào hình tròn, chữ nhật hoặc đường khép kín để tạo mặt cắt ANSI31" : "HATCH · Click inside closed entity to hatch"
   };
 
   setStatus(msgs[tool] || "Ready");
@@ -1735,6 +1827,44 @@ function zoomToExtents() {
   zoom = Math.min((w - pad * 2) / (Math.max(...xs) - Math.min(...xs) || 1), (h - pad * 2) / (Math.max(...ys) - Math.min(...ys) || 1));
   pan.x = -((Math.min(...xs) + Math.max(...xs)) / 2) * zoom;
   pan.y = ((Math.min(...ys) + Math.max(...ys)) / 2) * zoom;
+  draw();
+}
+
+async function finishSpline() {
+  if (points.length < 2) {
+    points = [];
+    draw();
+    return;
+  }
+  const splinePts = interpolateCatmullRom(points, 10);
+  await sync(
+    invoke("add_polyline", {
+      points: splinePts,
+      closed: false
+    })
+  );
+  points = [];
+  chooseTool("select");
+  setStatus(currentLang === "vi" ? "Đã tạo đường cong Spline (SPLINE)" : "Spline curve created");
+  draw();
+}
+
+async function finishRevcloud() {
+  if (points.length < 2) {
+    points = [];
+    draw();
+    return;
+  }
+  const cloudPts = generateRevisionCloud(points, 24);
+  await sync(
+    invoke("add_polyline", {
+      points: cloudPts,
+      closed: true
+    })
+  );
+  points = [];
+  chooseTool("select");
+  setStatus(currentLang === "vi" ? "Đã tạo đám mây ghi chú (REVCLOUD)" : "Revision Cloud created");
   draw();
 }
 
@@ -2152,7 +2282,9 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         setStatus(currentLang === "vi" ? "DIM · Chọn vị trí đường kích thước (Offset point)" : "DIM · Pick dimension offset");
       } else if (points.length === 3) {
         const [p1, p2, pOff] = points;
-        await sync(invoke("add_dimension", { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ox: pOff.x, oy: pOff.y }));
+        const dLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+        const textOverride = dLen.toFixed(dimPrecision) + (dimSuffix ? " " + dimSuffix : "");
+        await sync(invoke("add_dimension", { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ox: pOff.x, oy: pOff.y, textOverride }));
         points = [];
         chooseTool("select");
         setStatus(currentLang === "vi" ? "Đã ghi kích thước (DIM)" : "Dimension created");
@@ -2301,6 +2433,8 @@ function bindCommandBarEvents() {
     }
     if (e.key === "Enter" && document.activeElement !== $("#commandInput")) {
       if (activeTool === "polyline") finishPolyline(false);
+      if (activeTool === "spline") finishSpline();
+      if (activeTool === "revcloud") finishRevcloud();
       if (activeTool === "area" && points.length >= 3) {
         const res = calculatePolygonArea(points);
         measureInfo = `Area = ${res.area.toFixed(2)} mm² (${(res.area / 1e6).toFixed(4)} m²) | Perimeter = ${res.perimeter.toFixed(2)} mm`;
@@ -2354,6 +2488,14 @@ function bindCommandBarEvents() {
         if (cmd === "ZE" || cmd === "ZOOM EXTENTS") { zoomToExtents(); return; }
     if (cmd === "ZS" || cmd === "ZOOM SELECTED" || cmd === "ZOOM OBJECT") { zoomSelected(); return; }
     if (cmd === "EXPORT" || cmd === "PLOT" || cmd === "PRINT") { exportDrawingImage(); return; }
+    if (cmd === "SPLINE" || cmd === "SPL") { chooseTool("spline"); return; }
+    if (cmd === "REVCLOUD" || cmd === "CLOUD") { chooseTool("revcloud"); return; }
+    if (cmd === "HATCH" || cmd === "H") { chooseTool("hatch"); return; }
+    if (cmd === "PRECISION" || cmd === "DIMSTYLE" || cmd === "UNITS") {
+      dimPrecision = (dimPrecision + 1) % 4; // Cycles: 0, 1, 2, 3 decimals
+      setStatus(`Độ chính xác kích thước: ${dimPrecision} chữ số thập phân (DIMSTYLE)`);
+      return;
+    }
         if (cmd === "U" || cmd === "UNDO") { undoAction(); return; }
         if (cmd === "REDO") { redoAction(); return; }
         if (cmd === "E" || cmd === "ERASE" || cmd === "DELETE") { eraseSelected(); return; }

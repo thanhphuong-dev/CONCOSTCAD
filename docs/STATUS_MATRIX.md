@@ -14,6 +14,10 @@ Scope: new Rust Windows desktop CAD application. “Implemented” means code ex
 | Create Circle | Implemented, verified | Native AutoCAD `CIRCLE` entity in acadrust backend, center + radius input, grip quadrants and properties inspection. Tested round-trip. |
 | Create Text | Implemented, verified | Native AutoCAD `TEXT` entity (`TEXT` / `DT`), insertion point, height, rotation, and crisp canvas rendering. Tested round-trip. |
 | Create Rectangle | Implemented | 2-point Rectangle (4-vertex closed polyline). |
+| Create Spline (SPLINE / SPL) | Implemented, verified | Smooth Catmull-Rom curve interpolation through picked control points, exported to standard `LWPOLYLINE` for 100% AutoCAD round-trip compatibility. |
+| Revision Cloud (REVCLOUD) | Implemented, verified | Engineering review markup generating sequential convex arc segments (bulge 0.52) along picked boundary vertices. |
+| Hatch Patterns (HATCH / H) | Implemented, verified | ANSI31 45° diagonal cross-section lines generated across closed boundaries and circles. |
+| Dimension Precision (DIMSTYLE) | Implemented, verified | Configurable linear dimension precision (0 to 3 decimal places) and unit formatting via `DIMSTYLE` / `PRECISION`. |
 | Block Reference (INSERT) | Implemented, verified | Full support for AutoCAD `INSERT` entities: handle, layer, block name, insertion point, scale, rotation. Transformed via `rotate_many` and `mirror_many`. Rendered with CAD block marker and tag, inspected in Properties panel. |
 | Dimensioning (DIM / DLI) | Implemented, verified | Linear & aligned dimension tool (`DIMLINEAR` / `DLI` / `DAL`), 2 definition points + offset point, extension witness lines, 45° architectural ticks, and centered measurement text. Verified in automated test suite. |
 | Selection & Hit-Testing | Implemented, verified | Precise hit-testing for Line, Arc, Circle, Text, Insert, and Polyline (including bulge arcs). Glowing cyan selection highlight with grip points. Window & Crossing selection. |

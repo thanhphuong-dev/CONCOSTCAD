@@ -78,3 +78,7 @@ Tài liệu công bố chính thức về mức độ tương thích định d�
 | `ZOOM EXTENTS` | `ZE` | Vùng nhìn | Phóng to toàn bộ bản vẽ |
 | `ZOOM OBJECT` | `ZS`, `ZO` | Vùng nhìn | Phóng to đối tượng đang chọn |
 | `EXPORT` | `PLOT`, `PRINT` | Xuất bản | Xuất ảnh PNG độ nét cao |
+| `SPLINE` | `SPL` | Vẽ | Tạo đường cong mượt qua các điểm điều khiển |
+| `REVCLOUD` | `CLOUD` | Chú thích | Tạo đám mây ghi chú sửa đổi thiết kế |
+| `HATCH` | `H` | Vẽ | Tạo mẫu mặt cắt gạch chéo ANSI31 |
+| `DIMSTYLE` | `PRECISION`, `UNITS` | Chú thích | Cài đặt độ chính xác chữ số đo kích thước (0-3 thập phân) |

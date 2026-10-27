@@ -594,6 +594,7 @@ fn add_dimension(
     y2: f64,
     ox: f64,
     oy: f64,
+    text_override: Option<String>,
     state: State<'_, CadState>,
 ) -> Result<CadSnapshot, String> {
     let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
@@ -601,7 +602,7 @@ fn add_dimension(
         Vector2::new(x1, y1),
         Vector2::new(x2, y2),
         Vector2::new(ox, oy),
-        None,
+        text_override.as_deref(),
     )?;
     Ok(snapshot(&drawing))
 }
