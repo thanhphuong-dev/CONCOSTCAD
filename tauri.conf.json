@@ -16,7 +16,12 @@
       "height": 900,
       "minWidth": 1024,
       "minHeight": 680,
-      "decorations": false
+      "decorations": false,
+      "maximized": true,
+      "resizable": true,
+      "minimizable": true,
+      "maximizable": true,
+      "closable": true
     }],
     "security": { "csp": null }
   },

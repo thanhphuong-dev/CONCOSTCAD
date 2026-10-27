@@ -6,6 +6,76 @@ import "./style.css";
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
 
+// Crisp CAD toolbar glyphs. Inline SVG keeps the toolbar sharp at Windows display scaling.
+const CAD_ICON_PATHS = {
+  select: '<path d="M4 3l5 17 3.2-6.1L18 11 4 3z"/><path d="M12.2 14.2l4.2 4.2"/>',
+  line: '<path d="M5 19L19 5"/><path d="M5 15v4h4M15 5h4v4"/>',
+  arc: '<path d="M5 16a9 9 0 0 1 10-10"/><path d="M5 16h5M15 6v5"/>',
+  polyline: '<path d="M4 17l5-11 6 8 5-10"/><circle cx="4" cy="17" r="1"/><circle cx="9" cy="6" r="1"/><circle cx="15" cy="14" r="1"/>',
+  circle: '<circle cx="12" cy="12" r="7"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>',
+  rectangle: '<rect x="5" y="6" width="14" height="12"/><path d="M5 10h4M15 18h4"/>',
+  spline: '<path d="M4 16c3-9 5-9 8-2s5 7 8-2"/><circle cx="4" cy="16" r="1"/><circle cx="12" cy="14" r="1"/><circle cx="20" cy="12" r="1"/>',
+  revcloud: '<path d="M5 8c-3 2-1 5 2 4-2 3 1 5 3 3 0 3 4 3 4 0 2 2 5 0 3-3 3 1 5-2 2-4 2-2-1-5-3-3-1-3-5-3-5 0-2-2-5 0-3 3z"/>',
+  hatch: '<path d="M5 5h14v14H5zM5 10l5-5M5 16L16 5M10 19L19 10M15 19l4-4"/>',
+  text: '<path d="M5 5h14M12 5v14M8 19h8"/>',
+  move: '<path d="M12 4v16M4 12h16M12 4l-3 3M12 4l3 3M12 20l-3-3M12 20l3-3M4 12l3-3M4 12l3 3M20 12l-3-3M20 12l-3 3"/>',
+  copy: '<rect x="7" y="7" width="11" height="11"/><path d="M4 14V4h10"/>',
+  rotate: '<path d="M7 7a7 7 0 1 1-1 9"/><path d="M7 3v4H3M17 17l2 1-1 2"/>',
+  mirror: '<path d="M12 3v18M5 7l5 5-5 5V7zM19 7l-5 5 5 5V7z"/>',
+  fillet: '<path d="M5 18V7a2 2 0 0 1 2-2h11M5 14h5a4 4 0 0 0 4-4V5"/>',
+  chamfer: '<path d="M5 18V6h12M5 13h5l7-7"/>',
+  trim: '<path d="M5 5l14 14M19 5L5 19M7 7l5 5M17 17l-5-5"/>',
+  extend: '<path d="M5 19L19 5M5 12v7h7M12 5h7v7"/>',
+  join: '<path d="M4 12h6M14 12h6M10 9l4 3-4 3"/>',
+  offset: '<path d="M5 17l7-12 7 12M7 20h10"/>',
+  takeoff: '<path d="M5 18V8M10 18V5M15 18v-7M20 18V3M4 20h17"/>',
+  explode: '<path d="M12 12l-7-7M12 12l7-7M12 12l7 7M12 12l-7 7M12 3v4M21 12h-4M12 21v-4M3 12h4"/>',
+  erase: '<path d="M5 16l8-8 6 6-8 8H5l-2-3 2-3zM11 19h9"/>',
+  undo: '<path d="M9 7L4 12l5 5"/><path d="M5 12h8a6 6 0 0 1 6 6"/>',
+  redo: '<path d="M15 7l5 5-5 5"/><path d="M19 12h-8a6 6 0 0 0-6 6"/>',
+  dim: '<path d="M5 18V6M19 18V6M5 12h14M8 9l-3 3 3 3M16 9l3 3-3 3"/>',
+  dist: '<path d="M4 17L20 7M4 17h5M20 7h-5"/><path d="M8 19l-4-2 2-4M16 5l4 2-2 4"/>',
+  area: '<path d="M5 18l2-11 8-3 4 10-7 5-7-1z"/><path d="M8 15l7-6"/>',
+  zoom: '<circle cx="10" cy="10" r="6"/><path d="M15 15l5 5M7 10h6M10 7v6"/>',
+  open: '<path d="M3 6h7l2 2h9v10H3z"/><path d="M3 6l2 9h14l2-7"/>',
+  save: '<path d="M5 4h12l3 3v13H4V4zM8 4v6h8V4M8 20v-6h8v6"/>',
+  finish: '<path d="M5 12l4 4 10-10"/>',
+  new: '<path d="M5 4h10l4 4v12H5zM15 4v5h5M12 12v6M9 15h6"/>',
+  close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  zoomIn: '<circle cx="10" cy="10" r="6"/><path d="M15 15l5 5M7 10h6M10 7v6"/>',
+  zoomOut: '<circle cx="10" cy="10" r="6"/><path d="M15 15l5 5M7 10h6"/>',
+  grid: '<path d="M4 4h16v16H4zM4 10h16M4 15h16M10 4v16M15 4v16"/>',
+  snap: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>',
+  ortho: '<path d="M5 19V7h12M5 7l4 4M17 7l-4 4"/>',
+};
+
+function cadIcon(name) {
+  return `<svg class="cad-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${CAD_ICON_PATHS[name] || CAD_ICON_PATHS.select}</svg>`;
+}
+
+function applyToolbarIcons() {
+  const map = {
+    select: "select", line: "line", arc: "arc", polyline: "polyline", circle: "circle", rectangle: "rectangle",
+    spline: "spline", revcloud: "revcloud", hatch: "hatch", text: "text", move: "move", copy: "copy",
+    rotate: "rotate", mirror: "mirror", fillet: "fillet", chamfer: "chamfer", trim: "trim", extend: "extend",
+    join: "join", offset: "offset", dim: "dim", dist: "dist", area: "area",
+  };
+  $$("[data-tool]").forEach((button) => {
+    const name = map[button.dataset.tool];
+    if (name) {
+      const existing = button.querySelector(".tool-icon");
+      if (existing) existing.innerHTML = cadIcon(name);
+      else button.innerHTML = cadIcon(name);
+    }
+  });
+  const ids = { offsetBtn: "offset", takeoffRibbonBtn: "takeoff", explodeBtn: "explode", quickExplodeBtn: "explode", eraseBtn: "erase", undoBtn: "undo", redoBtn: "redo", zoomExtents: "zoom", ribbonOpen: "open", saveBtn: "save", ribbonStartNew: "new", ribbonStartOpen: "open", finishPolylineBtn: "finish", closePolylineBtn: "close", zoomInBtn: "zoomIn", zoomOutBtn: "zoomOut", ribbonToggleGrid: "grid", ribbonToggleSnap: "snap", ribbonToggleOrtho: "ortho" };
+  Object.entries(ids).forEach(([id, name]) => {
+    const button = document.getElementById(id);
+    const existing = button?.querySelector(".tool-icon");
+    if (existing) existing.innerHTML = cadIcon(name);
+  });
+}
+
 // Localization Catalogs (Tuần 23: Localization/Settings)
 let currentLang = localStorage.getItem("concostcad_lang") || "vi";
 
@@ -175,7 +245,25 @@ let model = {
   entities: []
 };
 
-let activeRibbonTab = "home";
+function getRecentDrawings() {
+  try {
+    const items = JSON.parse(localStorage.getItem("concostcad_recent_drawings") || "[]");
+    return Array.isArray(items) ? items.filter((item) => typeof item === "string") : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function rememberRecentDrawing(path) {
+  if (!path) return;
+  const recent = [path, ...getRecentDrawings().filter((item) => item !== path)].slice(0, 8);
+  localStorage.setItem("concostcad_recent_drawings", JSON.stringify(recent));
+}
+
+let activeRibbonTab = "start";
+let showStartScreen = true;
+let closeGuardBound = false;
+let appWindowRef = null;
 let activeTool = "select"; // 'select', 'line', 'arc', 'polyline', 'circle', 'rectangle', 'move', 'copy', 'rotate', 'mirror', 'dist', 'area'
 let points = [];
 let zoom = 1;
@@ -191,6 +279,7 @@ let activeGrip = null;
 // Command History State (Tuần 28)
 let commandHistory = [];
 let historyIndex = -1;
+let commandLog = [];
 
 // Offset Tool State (Tuần 25)
 let offsetDist = 20.0;
@@ -212,6 +301,16 @@ const app = $("#app");
 
 // Render Base Shell
 function renderShell() {
+  const recent = getRecentDrawings();
+  const shellTitle = showStartScreen
+    ? "Start"
+    : ((model.title || "Drawing1").split(/[\\/]/).pop().replace(/\.(dwg|dxf)$/i, "") || "Drawing1");
+  const shellStatus = showStartScreen
+    ? (currentLang === "vi" ? "Sẵn sàng · Start" : "Ready · Start")
+    : t("ready_status");
+  const recentMarkup = recent.length
+    ? recent.map((path) => `<button class="recent-drawing" data-recent-path="${escapeHtml(path)}"><span class="recent-file-icon">DWG</span><span><strong>${escapeHtml(path.split(/[\\/]/).pop())}</strong><small>${escapeHtml(path)}</small></span></button>`).join("")
+    : `<div class="start-empty">${currentLang === "vi" ? "Chưa có bản vẽ gần đây" : "No recent drawings"}</div>`;
   app.innerHTML = `
     <header class="titlebar" data-tauri-drag-region>
       <div class="brand-mark">C</div>
@@ -219,7 +318,7 @@ function renderShell() {
       <div class="title-divider"></div>
       <button class="title-action" id="newBtn">${t("new_btn")}</button>
       <button class="title-action" id="openBtn">${t("open_btn")}</button>
-      <div class="title-name" id="titleName">Drawing1</div>
+      <div class="title-name" id="titleName">${escapeHtml(shellTitle)}</div>
       <div class="title-spacer"></div>
       <button class="title-action" id="langToggleBtn" style="height:22px; padding:0 8px; font-weight:700; color:#8fe2f3; background:#1b3846;" title="Toggle Language (VI / EN)">${currentLang.toUpperCase()}</button>
       <div class="edition">${t("brand_sub")}</div>
@@ -230,6 +329,7 @@ function renderShell() {
       </div>
     </header>
     <nav class="tabs" id="ribbonTabs">
+      <button class="tab ${activeRibbonTab==='start'?'active':''}" data-tab="start">Start</button>
       <button class="tab ${activeRibbonTab==='home'?'active':''}" data-tab="home">${t("tab_home")}</button>
       <button class="tab ${activeRibbonTab==='draw'?'active':''}" data-tab="draw">${t("tab_draw")}</button>
       <button class="tab ${activeRibbonTab==='annotate'?'active':''}" data-tab="annotate">${t("tab_annotate")}</button>
@@ -318,14 +418,17 @@ function renderShell() {
       </aside>
     </main>
     <section class="commandbar">
-      <div class="prompt-mark">›_</div>
-      <input id="commandInput" autocomplete="off" placeholder="${t('cmd_placeholder')}" />
-      <button class="command-send" id="commandSend">↵</button>
+      <div class="command-history" id="commandHistory" aria-live="polite"></div>
+      <div class="command-entry">
+        <div class="prompt-mark">Command:</div>
+        <input id="commandInput" autocomplete="off" placeholder="${t('cmd_placeholder')}" />
+        <button class="command-send" id="commandSend" title="Execute command">↵</button>
+      </div>
     </section>
     <footer class="statusbar">
       <div class="status-message">
         <span class="status-light"></span>
-        <span id="status">${t("ready_status")}</span>
+        <span id="status">${shellStatus}</span>
       </div>
       <div class="status-right">
         <span id="coordReadout">X  0.000   Y  0.000</span>
@@ -337,8 +440,24 @@ function renderShell() {
         <button class="user-icon" title="Engineer Thanh Phuong">P</button>
       </div>
     </footer>
+    <section class="start-screen ${showStartScreen ? "" : "hidden"}" id="startScreen">
+      <div class="start-content">
+        <div class="start-brand"><span class="start-brand-mark">C</span><div><strong>CONCOSTCAD</strong><small>${currentLang === "vi" ? "Bản vẽ kỹ thuật 2D" : "2D drafting workspace"}</small></div></div>
+        <div class="start-actions">
+          <button class="start-card primary" id="startNewBtn"><span class="start-card-icon">＋</span><span><strong>${currentLang === "vi" ? "Bản vẽ mới" : "New Drawing"}</strong><small>${currentLang === "vi" ? "Tạo bản vẽ trống" : "Start with a blank drawing"}</small></span></button>
+          <button class="start-card" id="startOpenBtn"><span class="start-card-icon">▣</span><span><strong>${currentLang === "vi" ? "Mở tệp" : "Open Files"}</strong><small>DWG / DXF</small></span></button>
+        </div>
+        <div class="start-columns">
+          <div class="start-panel"><div class="start-panel-title">${currentLang === "vi" ? "Gần đây" : "Recent"}</div><div class="recent-list">${recentMarkup}</div></div>
+          <div class="start-panel"><div class="start-panel-title">${currentLang === "vi" ? "Bắt đầu" : "Getting Started"}</div><div class="start-tip">${currentLang === "vi" ? "Tạo bản vẽ mới hoặc mở DWG/DXF để bắt đầu làm việc." : "Create a new drawing or open a DWG/DXF to begin."}</div></div>
+        </div>
+        <div class="start-footer">CONCOSTCAD · ${currentLang === "vi" ? "Không gian làm việc bản vẽ" : "Drafting workspace"}</div>
+      </div>
+    </section>
   `;
 
+  renderCommandLog();
+  applyToolbarIcons();
   bindShellEvents();
 }
 
@@ -356,6 +475,7 @@ function bindShellEvents() {
 
   $$("#ribbonTabs .tab").forEach((tab) => {
     tab.onclick = () => {
+      if (tab.dataset.tab === "start" && !showStartScreen) return showStartTab();
       $$("#ribbonTabs .tab").forEach((t) => t.classList.remove("active"));
       tab.classList.add("active");
       activeRibbonTab = tab.dataset.tab;
@@ -368,7 +488,8 @@ function bindShellEvents() {
   });
 
   $("#newBtn").onclick = async () => {
-    await sync(invoke("new_drawing"));
+    enterEditor();
+    if (await sync(invoke("new_drawing"))) updateActiveDocumentTab();
     points = [];
     pan = { x: 0, y: 0 };
     zoom = 1;
@@ -377,14 +498,40 @@ function bindShellEvents() {
   };
 
   $("#openBtn").onclick = openDrawing;
+  $("#startNewBtn").onclick = () => $("#newBtn").click();
+  $("#startOpenBtn").onclick = openDrawing;
+  $$(".recent-drawing").forEach((button) => {
+    button.onclick = () => openDrawing(button.dataset.recentPath);
+  });
   $("#toggleGridBtn").onclick = toggleGrid;
   $("#toggleSnapBtn").onclick = toggleSnap;
   $("#toggleOrthoBtn").onclick = toggleOrtho;
 
   const appWindow = getCurrentWindow();
-  $("#minimizeBtn").onclick = () => appWindow.minimize();
-  $("#maximizeBtn").onclick = () => appWindow.toggleMaximize();
-  $("#closeBtn").onclick = () => appWindow.close();
+  appWindowRef = appWindow;
+  $("#minimizeBtn").onclick = async (event) => {
+    event.stopPropagation();
+    await appWindow.minimize();
+  };
+  $("#maximizeBtn").onclick = async (event) => {
+    event.stopPropagation();
+    await appWindow.toggleMaximize();
+  };
+  $("#closeBtn").onclick = async (event) => {
+    event.stopPropagation();
+    await appWindow.close();
+  };
+  if (!closeGuardBound) {
+    closeGuardBound = true;
+    appWindow.onCloseRequested(async (event) => {
+      if (!model.dirty) return;
+      event.preventDefault();
+      const message = currentLang === "vi"
+        ? "Bản vẽ chưa được lưu. Bạn có muốn đóng mà không lưu không?"
+        : "This drawing has unsaved changes. Close without saving?";
+      if (window.confirm(message)) await appWindow.close();
+    });
+  }
 
   $("#addLayerBtn").onclick = () => {
     isAddingLayer = !isAddingLayer;
@@ -447,6 +594,46 @@ function bindShellEvents() {
     };
   }
   bindCommandBarEvents();
+}
+
+function enterEditor() {
+  showStartScreen = false;
+  activeRibbonTab = "home";
+  $$("#ribbonTabs .tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === activeRibbonTab));
+  renderRibbon();
+  const start = $("#startScreen");
+  if (start) start.remove();
+}
+
+function showStartTab() {
+  showStartScreen = true;
+  activeRibbonTab = "start";
+  renderShell();
+  new ResizeObserver(resize).observe($("#viewport"));
+  resize();
+  renderRibbon();
+  render();
+}
+
+function closeCurrentDrawing() {
+  if (model.dirty) {
+    const message = currentLang === "vi"
+      ? "Bản vẽ chưa được lưu. Đóng bản vẽ không lưu?"
+      : "This drawing has unsaved changes. Close without saving?";
+    if (!window.confirm(message)) return false;
+  }
+  showStartTab();
+  setStatus(currentLang === "vi" ? "Đã đóng bản vẽ · Start" : "Drawing closed · Start");
+  return true;
+}
+
+function updateActiveDocumentTab() {
+  const active = openDocuments.find((d) => d.id === activeDocId);
+  if (!active) return;
+  active.title = (model.title || "Drawing1").split(/[\\/]/).pop();
+  active.path = model.title;
+  active.dirty = Boolean(model.dirty);
+  renderDocumentTabs();
 }
 
 let showGrid = true;
@@ -528,6 +715,21 @@ const setStatus = (s) => {
   const el = $("#status");
   if (el) el.textContent = s;
 };
+
+function logCommand(text, kind = "prompt") {
+  if (!text) return;
+  commandLog.push({ text, kind });
+  if (commandLog.length > 80) commandLog.shift();
+  renderCommandLog();
+}
+
+function renderCommandLog() {
+  const history = $("#commandHistory");
+  if (history) {
+    history.innerHTML = commandLog.slice(-5).map((entry) => `<div class="command-line ${entry.kind}">${escapeHtml(entry.text)}</div>`).join("");
+    history.scrollTop = history.scrollHeight;
+  }
+}
 
 // Coordinate Transforms
 function worldToScreen(x, y) {
@@ -1372,7 +1574,19 @@ function renderRibbon() {
   const container = $("#ribbonContainer");
   if (!container) return;
 
-  if (activeRibbonTab === "home") {
+  if (activeRibbonTab === "start") {
+    container.innerHTML = `
+      <div class="ribbon-group start-ribbon-group">
+        <div class="tools">
+          <button class="tool-button" id="ribbonStartNew"><span class="tool-icon">＋</span><span>${currentLang === "vi" ? "Bản vẽ mới" : "New Drawing"}</span></button>
+          <button class="tool-button" id="ribbonStartOpen"><span class="tool-icon">▣</span><span>${currentLang === "vi" ? "Mở tệp" : "Open"}</span></button>
+        </div>
+        <div class="group-caption">START</div>
+      </div>
+      <div class="ribbon-spacer"></div>
+      <div class="ribbon-hint">CONCOSTCAD · START</div>
+    `;
+  } else if (activeRibbonTab === "home") {
     container.innerHTML = `
       <div class="ribbon-group">
         <div class="tools">
@@ -1500,7 +1714,12 @@ function renderRibbon() {
     `;
   }
 
+  applyToolbarIcons();
   bindRibbonEvents();
+  const startNew = $("#ribbonStartNew");
+  if (startNew) startNew.onclick = () => $("#newBtn").click();
+  const startOpen = $("#ribbonStartOpen");
+  if (startOpen) startOpen.onclick = openDrawing;
   const qx = $("#quickExplodeBtn");
   if (qx) qx.onclick = explodeSelected;
 }
@@ -1621,6 +1840,13 @@ function chooseTool(tool) {
   };
 
   setStatus(msgs[tool] || "Ready");
+  if (tool !== "select") logCommand(msgs[tool] || tool.toUpperCase());
+  const commandInput = $("#commandInput");
+  if (commandInput) {
+    commandInput.placeholder = tool === "select"
+      ? t("cmd_placeholder")
+      : `${tool.toUpperCase()} · ${msgs[tool] || "Enter value or pick a point"}`;
+  }
   draw();
   const vp = $("#viewport");
   if (vp) vp.focus();
@@ -1890,14 +2116,17 @@ async function redoAction() {
   }
 }
 
-async function openDrawing() {
-  const path = await open({
+async function openDrawing(selectedPath = null) {
+  const path = selectedPath || await open({
     multiple: false,
     filters: [{ name: "CAD drawing", extensions: ["dwg", "dxf"] }]
   });
   if (path) {
+    enterEditor();
     setStatus("Opening drawing…");
     if (await sync(invoke("open_drawing", { path }))) {
+      rememberRecentDrawing(path);
+      updateActiveDocumentTab();
       selectedHandles.clear();
       setStatus(`Opened ${model.entityCount} model-space entities`);
       zoomToExtents();
@@ -2005,6 +2234,37 @@ async function finishPolyline(closed = false) {
   draw();
 }
 
+function undoPolylineVertex() {
+  if (activeTool !== "polyline" || points.length === 0) return false;
+  points.pop();
+  setStatus(points.length
+    ? `PLINE · ${points.length} vertices; Specify next point or [Undo/Close]`
+    : "PLINE · Specify first point");
+  draw();
+  return true;
+}
+
+async function acceptCurrentCommand() {
+  if (activeTool === "line" && points.length > 0) {
+    points = [];
+    chooseTool("select");
+    setStatus("LINE finished");
+  } else if (activeTool === "polyline") {
+    await finishPolyline(false);
+  } else if (activeTool === "spline") {
+    await finishSpline();
+  } else if (activeTool === "revcloud") {
+    await finishRevcloud();
+  } else if (activeTool === "area" && points.length >= 3) {
+    const res = calculatePolygonArea(points);
+    measureInfo = `Area = ${res.area.toFixed(2)} mm² (${(res.area / 1e6).toFixed(4)} m²) | Perimeter = ${res.perimeter.toFixed(2)} mm`;
+    points = [];
+    setStatus(measureInfo);
+    renderRibbon();
+    draw();
+  }
+}
+
 function toggleGrid() {
   showGrid = !showGrid;
   const b = $("#toggleGridBtn");
@@ -2029,6 +2289,11 @@ function toggleOrtho() {
 // Canvas Event Bindings
 function bindCanvasEvents(viewportEl, canvasEl) {
   viewportEl.addEventListener("pointerdown", async (e) => {
+    if (e.button === 2) {
+      e.preventDefault();
+      await acceptCurrentCommand();
+      return;
+    }
     if (e.button === 1 || e.code === "Space") {
       isPanning = true;
       lastPan = { x: e.clientX, y: e.clientY };
@@ -2143,14 +2408,15 @@ function bindCanvasEvents(viewportEl, canvasEl) {
       points.push(p);
       if (points.length === 2) {
         await sync(invoke("add_line", { x1: points[0].x, y1: points[0].y, x2: p.x, y2: p.y }));
-        points = [];
-        setStatus("LINE created");
+        // AutoCAD LINE stays active: the previous endpoint becomes the next start point.
+        points = [p];
+        setStatus("LINE · Specify next point or press Enter to finish");
       } else {
-        setStatus("LINE · Pick end point");
+        setStatus("LINE · Specify next point");
       }
     } else if (activeTool === "polyline") {
       points.push({ ...p, bulge: 0 });
-      setStatus(`PLINE · ${points.length} vertices; Enter to finish`);
+      setStatus(`PLINE · ${points.length} vertices; Specify next point or [Undo/Close]`);
     } else if (activeTool === "circle") {
       points.push(p);
       if (points.length === 2) {
@@ -2292,6 +2558,9 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         if (hit) {
           selectedHandles.add(hit.handle);
           renderProperties();
+          setStatus("MOVE · Objects selected; pick base point");
+          draw();
+          return;
         } else {
           setStatus("MOVE · Select objects first");
           return;
@@ -2314,6 +2583,9 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         if (hit) {
           selectedHandles.add(hit.handle);
           renderProperties();
+          setStatus("COPY · Objects selected; pick base point");
+          draw();
+          return;
         } else {
           setStatus("COPY · Select objects first");
           return;
@@ -2336,6 +2608,9 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         if (hit) {
           selectedHandles.add(hit.handle);
           renderProperties();
+          setStatus("ROTATE · Objects selected; pick base point");
+          draw();
+          return;
         } else {
           setStatus("ROTATE · Select objects first");
           return;
@@ -2352,31 +2627,17 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         setStatus(`Rotated by ${ang.toFixed(1)}°`);
       }
     } else if (activeTool === "mirror") {
-    } else if (activeTool === "offset") {
-      if (!offsetTargetHandle) {
-        const hit = hitTestEntity(p, 8 / zoom);
-        if (hit) {
-          offsetTargetHandle = hit.handle;
-          setStatus(`OFFSET · Pick side to offset (Distance = ${offsetDist})`);
-        } else {
-          setStatus("OFFSET · Click on an entity to offset");
-        }
-      } else {
-        await sync(invoke("offset_entity", { handle: offsetTargetHandle, distance: offsetDist, sideX: p.x, sideY: p.y }));
-        offsetTargetHandle = null;
-        setStatus(`Offset created at distance ${offsetDist}`);
-        chooseTool("select");
-      }
-
       if (selectedHandles.size === 0) {
         const hit = hitTestEntity(p, 8 / zoom);
         if (hit) {
           selectedHandles.add(hit.handle);
           renderProperties();
-        } else {
-          setStatus("MIRROR · Select objects first");
+          setStatus("MIRROR · Object selected; pick first axis point");
+          draw();
           return;
         }
+        setStatus("MIRROR · Select objects first");
+        return;
       }
       points.push(p);
       if (points.length === 2) {
@@ -2394,6 +2655,22 @@ function bindCanvasEvents(viewportEl, canvasEl) {
       } else {
         setStatus("MIRROR · Pick second point of mirror axis");
       }
+    } else if (activeTool === "offset") {
+      if (!offsetTargetHandle) {
+        const hit = hitTestEntity(p, 8 / zoom);
+        if (hit) {
+          offsetTargetHandle = hit.handle;
+          setStatus(`OFFSET · Pick side to offset (Distance = ${offsetDist})`);
+        } else {
+          setStatus("OFFSET · Click on an entity to offset");
+        }
+      } else {
+        await sync(invoke("offset_entity", { handle: offsetTargetHandle, distance: offsetDist, sideX: p.x, sideY: p.y }));
+        offsetTargetHandle = null;
+        setStatus(`Offset created at distance ${offsetDist}`);
+        chooseTool("select");
+      }
+
     } else if (activeTool === "dim") {
       points.push(p);
       if (points.length === 1) {
@@ -2430,6 +2707,8 @@ function bindCanvasEvents(viewportEl, canvasEl) {
 
     draw();
   });
+
+  viewportEl.addEventListener("contextmenu", (e) => e.preventDefault());
 
   viewportEl.addEventListener("pointermove", (e) => {
     const r = canvasEl.getBoundingClientRect();
@@ -2718,6 +2997,11 @@ function bindCommandBarEvents() {
       openDrawing();
     }
     if (e.key === "Enter" && document.activeElement !== $("#commandInput")) {
+      if (activeTool === "line" && points.length > 0) {
+        points = [];
+        chooseTool("select");
+        setStatus("LINE finished");
+      }
       if (activeTool === "polyline") finishPolyline(false);
       if (activeTool === "spline") finishSpline();
       if (activeTool === "revcloud") finishRevcloud();
@@ -2761,16 +3045,31 @@ function bindCommandBarEvents() {
         const raw = e.currentTarget.value.trim();
         if (raw) {
           commandHistory.push(raw);
+          logCommand(`> ${raw}`, "input");
           if (commandHistory.length > 50) commandHistory.shift();
           historyIndex = -1;
         }
         e.currentTarget.value = "";
         if (!raw) {
+          if (activeTool === "line" && points.length > 0) {
+            points = [];
+            chooseTool("select");
+            setStatus("LINE finished");
+            return;
+          }
           if (activeTool === "polyline") finishPolyline(false);
           return;
         }
 
         const cmd = raw.toUpperCase();
+        if (activeTool === "polyline" && (cmd === "U" || cmd === "UNDO") && undoPolylineVertex()) return;
+        if (activeTool === "polyline" && (cmd === "C" || cmd === "CLOSE")) { finishPolyline(true); return; }
+        if (cmd === "START") { showStartTab(); return; }
+        if (cmd === "NEW" || cmd === "QNEW") { $("#newBtn")?.click(); return; }
+        if (cmd === "OPEN") { openDrawing(); return; }
+        if (cmd === "SAVE" || cmd === "QSAVE") { saveDrawing(); return; }
+        if (cmd === "CLOSE" || cmd === "CLOSEDFILE") { closeCurrentDrawing(); return; }
+        if (cmd === "QUIT" || cmd === "EXIT") { appWindowRef?.close(); return; }
         if (cmd === "ZE" || cmd === "ZOOM EXTENTS") { zoomToExtents(); return; }
     if (cmd === "ZS" || cmd === "ZOOM SELECTED" || cmd === "ZOOM OBJECT") { zoomSelected(); return; }
     if (cmd === "EXPORT" || cmd === "PLOT" || cmd === "PRINT") { exportDrawingImage(); return; }
@@ -2907,12 +3206,12 @@ async function handleCoordinateInput(p) {
     points.push(p);
     if (points.length === 2) {
       await sync(invoke("add_line", { x1: points[0].x, y1: points[0].y, x2: p.x, y2: p.y }));
-      points = [];
-      setStatus("LINE created");
+      points = [p];
+      setStatus("LINE · Specify next point or press Enter to finish");
     }
   } else if (activeTool === "polyline") {
     points.push({ ...p, bulge: 0 });
-    setStatus(`PLINE · ${points.length} vertices; Enter to finish`);
+    setStatus(`PLINE · ${points.length} vertices; Specify next point or [Undo/Close]`);
   } else if (activeTool === "arc") {
     points.push(p);
     if (points.length === 3) {
@@ -2963,7 +3262,7 @@ function renderDocumentTabs() {
       <span class="file-dot"></span>
       <span class="doc-title">${escapeHtml(d.title)}</span>
       <span class="dirty-dot ${d.dirty ? 'visible' : ''}"></span>
-      ${openDocuments.length > 1 ? `<button class="close-tab" data-close-id="${d.id}">×</button>` : ''}
+      <button class="close-tab" data-close-id="${d.id}" title="Close drawing">×</button>
     </div>
   `).join("");
 
@@ -2987,7 +3286,10 @@ function renderDocumentTabs() {
     btn.onclick = (e) => {
       e.stopPropagation();
       const id = parseInt(btn.dataset.closeId, 10);
-      if (openDocuments.length <= 1) return;
+      if (openDocuments.length <= 1) {
+        closeCurrentDrawing();
+        return;
+      }
       openDocuments = openDocuments.filter((d) => d.id !== id);
       if (activeDocId === id) {
         activeDocId = openDocuments[openDocuments.length - 1].id;
