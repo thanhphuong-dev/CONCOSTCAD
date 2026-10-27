@@ -15,6 +15,8 @@ const ACCENT: Color32 = Color32::from_rgb(49, 167, 196);
 const TEXT: Color32 = Color32::from_rgb(224, 228, 232);
 const MUTED: Color32 = Color32::from_rgb(147, 157, 168);
 const GRID: Color32 = Color32::from_rgb(42, 48, 55);
+const MIN_ZOOM: f32 = 0.000_001;
+const MAX_ZOOM: f32 = 4_000.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tool {
@@ -83,10 +85,13 @@ pub struct CadApp {
     confirm_new: bool,
     confirm_open: bool,
     pending_open_path: Option<std::path::PathBuf>,
+    pending_open_drawing: Option<(std::path::PathBuf, DrawingDocument)>,
+    open_source_stamp: Option<(u64, u64, Tool, Vec<Point2>, Vec<f64>)>,
     open_receiver: Option<Receiver<Result<(std::path::PathBuf, DrawingDocument), String>>>,
     save_receiver: Option<Receiver<(u64, u64, std::path::PathBuf, Result<(), String>)>>,
     zoom: f32,
     world_center: Point2,
+    zoom_extents_requested: bool,
     cursor_world: Point2,
     snap_enabled: bool,
     snap_cache: SnapCache,
@@ -121,10 +126,13 @@ impl CadApp {
             confirm_new: false,
             confirm_open: false,
             pending_open_path: None,
+            pending_open_drawing: None,
+            open_source_stamp: None,
             open_receiver: None,
             save_receiver: None,
             zoom: 40.0,
             world_center: Point2::default(),
+            zoom_extents_requested: false,
             cursor_world: Point2::default(),
             snap_enabled: true,
             snap_cache: SnapCache::default(),
@@ -146,13 +154,17 @@ impl CadApp {
     }
 
     fn open_dialog(&mut self) {
+        if self.open_receiver.is_some() {
+            self.status = "Open already in progress".to_owned();
+            return;
+        }
         let Some(path) = rfd::FileDialog::new()
             .add_filter("CAD drawings", &["dwg", "dxf"])
             .pick_file()
         else {
             return;
         };
-        if self.drawing.dirty() {
+        if self.drawing.dirty() || !self.pending_points.is_empty() {
             self.pending_open_path = Some(path);
             self.confirm_open = true;
             return;
@@ -163,6 +175,13 @@ impl CadApp {
     fn load_path(&mut self, path: std::path::PathBuf) {
         let (sender, receiver) = mpsc::channel();
         self.open_receiver = Some(receiver);
+        self.open_source_stamp = Some((
+            self.drawing.id(),
+            self.drawing.state_id(),
+            self.tool,
+            self.pending_points.clone(),
+            self.pending_bulges.clone(),
+        ));
         self.status = format!("Opening {}…", path.display());
         std::thread::spawn(move || {
             let result = DrawingDocument::open(&path).map(|doc| (path, doc));
@@ -177,15 +196,24 @@ impl CadApp {
             .and_then(|receiver| receiver.try_recv().ok());
         if let Some(result) = result {
             self.open_receiver = None;
+            let source_stamp = self.open_source_stamp.take();
             match result {
                 Ok((path, drawing)) => {
-                    let count = drawing.entity_count();
-                    self.drawing = drawing;
-                    self.selection.clear();
-                    self.pending_points.clear();
-                    self.pending_bulges.clear();
-                    self.status =
-                        format!("Opened {} · {count} model-space entities", path.display());
+                    let current_stamp = (
+                        self.drawing.id(),
+                        self.drawing.state_id(),
+                        self.tool,
+                        self.pending_points.clone(),
+                        self.pending_bulges.clone(),
+                    );
+                    if source_stamp != Some(current_stamp) {
+                        self.pending_open_drawing = Some((path, drawing));
+                        self.confirm_open = true;
+                        self.status =
+                            "Drawing changed while opening; confirm before replacing it".to_owned();
+                    } else {
+                        self.install_opened_drawing(path, drawing);
+                    }
                 }
                 Err(error) => self.status = format!("Open failed: {error}"),
             }
@@ -194,7 +222,23 @@ impl CadApp {
         }
     }
 
+    fn install_opened_drawing(&mut self, path: std::path::PathBuf, drawing: DrawingDocument) {
+        let count = drawing.entity_count();
+        self.drawing = drawing;
+        self.selection.clear();
+        self.property_draft = None;
+        self.pending_points.clear();
+        self.pending_bulges.clear();
+        self.tool = Tool::Select;
+        self.status = format!("Opened {} · {count} model-space entities", path.display());
+        self.zoom_extents_requested = true;
+    }
+
     fn save_dialog(&mut self) {
+        if !self.pending_points.is_empty() {
+            self.status = "Finish or cancel the active drawing command before saving".to_owned();
+            return;
+        }
         if self.save_receiver.is_some() {
             self.status = "Save already in progress".to_owned();
             return;
@@ -257,7 +301,7 @@ impl CadApp {
 
     fn choose_file_command(&mut self, command: &str) {
         match command {
-            "Open" => self.open_dialog(),
+            "Open" | "Open DWG/DXF" => self.open_dialog(),
             "Save" => self.save_dialog(),
             _ => {}
         }
@@ -355,6 +399,10 @@ impl CadApp {
             "PL" | "PLINE" | "POLYLINE" => self.set_tool(Tool::Polyline),
             "M" | "MOVE" if !self.selection.is_empty() => self.set_tool(Tool::Move),
             "SELECT" | "S" => self.set_tool(Tool::Select),
+            "ZE" | "ZOOM EXTENTS" => {
+                self.zoom_extents_requested = true;
+                self.status = "Zoom Extents".to_owned();
+            }
             "CLOSE" if self.tool == Tool::Polyline => self.finish_polyline(true),
             "BULGE" if self.tool == Tool::Polyline => {
                 self.status = "PLINE bulge: enter the next point as x,y,b=<value> (for example 10,5,b=0.4142)".to_owned();
@@ -442,6 +490,7 @@ impl CadApp {
             status,
             zoom,
             world_center,
+            zoom_extents_requested,
             cursor_world,
             snap_enabled,
             snap_cache,
@@ -463,6 +512,7 @@ impl CadApp {
             status,
             zoom,
             world_center,
+            zoom_extents_requested,
             cursor_world,
             snap_enabled,
             snap_cache,
@@ -546,7 +596,10 @@ impl CadApp {
                     }
                     RibbonTab::View => {
                         ribbon_group(ui, "VIEW", |ui| {
-                            ui.label("Zoom with wheel · Pan with middle mouse");
+                            if ui.button("Zoom Extents").clicked() {
+                                self.zoom_extents_requested = true;
+                            }
+                            ui.label("Wheel zoom · Middle-button pan");
                             ui.checkbox(&mut self.snap_enabled, "Object snap · F3");
                             ui.checkbox(&mut self.ortho_enabled, "Ortho · F8");
                         });
@@ -607,6 +660,9 @@ impl CadApp {
 
     fn start_new_drawing(&mut self) {
         self.drawing = DrawingDocument::new();
+        self.zoom = 40.0;
+        self.world_center = Point2::default();
+        self.zoom_extents_requested = false;
         self.selection.clear();
         self.pending_points.clear();
         self.pending_bulges.clear();
@@ -690,7 +746,7 @@ impl eframe::App for CadApp {
                 .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                 .show(&ctx, |ui| {
                     ui.label(
-                        "The current drawing has unsaved geometry. Starting over will discard it.",
+                        "The current drawing has unsaved changes or an unfinished command. Starting over will discard them.",
                     );
                     ui.horizontal(|ui| {
                         if ui.button("Keep drawing").clicked() {
@@ -709,15 +765,24 @@ impl eframe::App for CadApp {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                 .show(&ctx, |ui| {
-                    ui.label("The current drawing has unsaved changes.");
+                    if self.pending_open_drawing.is_some() {
+                        ui.label("The current drawing changed while the file was opening.");
+                    } else {
+                        ui.label(
+                            "The current drawing has unsaved changes or an unfinished command.",
+                        );
+                    }
                     ui.horizontal(|ui| {
-                        if ui.button("Keep drawing").clicked() {
+                        if ui.button("Keep current drawing").clicked() {
                             self.confirm_open = false;
                             self.pending_open_path = None;
+                            self.pending_open_drawing = None;
                         }
-                        if ui.button("Discard and open").clicked() {
+                        if ui.button("Discard current and open").clicked() {
                             self.confirm_open = false;
-                            if let Some(path) = self.pending_open_path.take() {
+                            if let Some((path, drawing)) = self.pending_open_drawing.take() {
+                                self.install_opened_drawing(path, drawing);
+                            } else if let Some(path) = self.pending_open_path.take() {
                                 self.load_path(path);
                             }
                         }
@@ -884,6 +949,7 @@ struct WorkspaceViewer<'a> {
     status: &'a mut String,
     zoom: &'a mut f32,
     world_center: &'a mut Point2,
+    zoom_extents_requested: &'a mut bool,
     cursor_world: &'a mut Point2,
     snap_enabled: &'a mut bool,
     snap_cache: &'a mut SnapCache,
@@ -921,6 +987,16 @@ impl TabViewer for WorkspaceViewer<'_> {
 impl WorkspaceViewer<'_> {
     fn canvas_ui(&mut self, ui: &mut egui::Ui) {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        if *self.zoom_extents_requested {
+            fit_view_to_drawing(
+                self.drawing,
+                rect,
+                self.zoom,
+                self.world_center,
+                self.status,
+            );
+            *self.zoom_extents_requested = false;
+        }
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, CANVAS_BG);
         draw_grid(&painter, rect, *self.zoom, *self.world_center);
@@ -949,7 +1025,7 @@ impl WorkspaceViewer<'_> {
                 nearest_snap(
                     self.snap_cache,
                     raw,
-                    10.0 / f64::from((*self.zoom).max(0.1)),
+                    10.0 / f64::from((*self.zoom).max(MIN_ZOOM)),
                 )
             } else {
                 None
@@ -1030,7 +1106,15 @@ impl WorkspaceViewer<'_> {
         }
         let wheel = ui.input(|input| input.smooth_scroll_delta.y);
         if response.hovered() && wheel.abs() > 0.0 {
-            *self.zoom = (*self.zoom * (wheel * 0.001).exp()).clamp(0.5, 4_000.0);
+            if let Some(pointer) = response.hover_pos() {
+                let anchor = screen_to_world(pointer, rect, *self.zoom, *self.world_center);
+                let next_zoom = (*self.zoom * (wheel * 0.001).exp()).clamp(MIN_ZOOM, MAX_ZOOM);
+                *self.world_center = Point2::new(
+                    anchor.x - f64::from(pointer.x - rect.center().x) / f64::from(next_zoom),
+                    anchor.y + f64::from(pointer.y - rect.center().y) / f64::from(next_zoom),
+                );
+                *self.zoom = next_zoom;
+            }
         }
         if response.dragged_by(egui::PointerButton::Middle) {
             let delta = response.drag_delta();
@@ -1077,7 +1161,7 @@ impl WorkspaceViewer<'_> {
                     if hidden_layers.contains(&entity.common().layer.to_ascii_lowercase()) {
                         continue;
                     }
-                    let points = entity_sample_points(entity);
+                    let points = entity_sample_points(entity, *self.zoom);
                     if selection_box_matches(
                         &points,
                         box_rect,
@@ -1102,7 +1186,7 @@ impl WorkspaceViewer<'_> {
                     nearest_snap(
                         self.snap_cache,
                         raw,
-                        10.0 / f64::from((*self.zoom).max(0.1)),
+                        10.0 / f64::from((*self.zoom).max(MIN_ZOOM)),
                     )
                     .map(|snap| snap.point)
                     .unwrap_or(raw)
@@ -1526,7 +1610,7 @@ fn handle_point(
     match *tool {
         Tool::Select => {
             selection.clear();
-            let tolerance = 8.0 / f64::from(zoom.max(0.1));
+            let tolerance = 8.0 / f64::from(zoom.max(MIN_ZOOM));
             if let Some((handle, _)) = drawing
                 .model_space_entities()
                 .filter_map(|entity| {
@@ -1537,7 +1621,7 @@ fn handle_point(
                         return None;
                     }
                     entity_pick_distance(entity, point)
-                        .filter(|distance| *distance <= tolerance)
+                        .filter(|distance| distance.is_finite() && *distance <= tolerance)
                         .map(|distance| (entity.common().handle, distance))
                 })
                 .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -1615,7 +1699,7 @@ fn handle_point(
     }
 }
 
-fn entity_sample_points(entity: &EntityType) -> Vec<Point2> {
+fn entity_sample_points(entity: &EntityType, zoom: f32) -> Vec<Point2> {
     match entity {
         EntityType::Line(line) => vec![
             Point2::new(line.start.x, line.start.y),
@@ -1624,8 +1708,7 @@ fn entity_sample_points(entity: &EntityType) -> Vec<Point2> {
         EntityType::Arc(arc) => {
             let start = arc.start_angle;
             let sweep = (arc.end_angle - start).rem_euclid(std::f64::consts::TAU);
-            let count =
-                ((sweep.abs() / (std::f64::consts::PI / 32.0)).ceil() as usize).clamp(2, 256);
+            let count = arc_tessellation_count(sweep, arc.radius, zoom);
             (0..=count)
                 .map(|i| {
                     let angle = start + sweep * i as f64 / count as f64;
@@ -1659,8 +1742,7 @@ fn entity_sample_points(entity: &EntityType) -> Vec<Point2> {
                     points.push(p1);
                 } else if let Some((center, radius, start, sweep)) = bulge_geometry(p0, p1, a.bulge)
                 {
-                    let n = ((sweep.abs() / (std::f64::consts::PI / 32.0)).ceil() as usize)
-                        .clamp(2, 256);
+                    let n = arc_tessellation_count(sweep, radius, zoom);
                     for j in 1..=n {
                         let angle = start + sweep * j as f64 / n as f64;
                         points.push(Point2::new(
@@ -1703,6 +1785,133 @@ fn selection_box_matches(
         || screen
             .windows(2)
             .any(|pair| segment_intersects_rect(pair[0], pair[1], box_rect))
+}
+
+fn entity_extent_points(entity: &EntityType) -> Vec<Point2> {
+    match entity {
+        EntityType::Line(line) => vec![
+            Point2::new(line.start.x, line.start.y),
+            Point2::new(line.end.x, line.end.y),
+        ],
+        EntityType::Arc(arc) => {
+            let start = arc.start_angle;
+            let sweep = (arc.end_angle - start).rem_euclid(std::f64::consts::TAU);
+            let mut points = vec![
+                Point2::new(
+                    arc.center.x + arc.radius * start.cos(),
+                    arc.center.y + arc.radius * start.sin(),
+                ),
+                Point2::new(
+                    arc.center.x + arc.radius * arc.end_angle.cos(),
+                    arc.center.y + arc.radius * arc.end_angle.sin(),
+                ),
+            ];
+            for angle in [
+                0.0,
+                std::f64::consts::FRAC_PI_2,
+                std::f64::consts::PI,
+                3.0 * std::f64::consts::FRAC_PI_2,
+            ] {
+                if angle_on_sweep(angle, start, sweep) {
+                    points.push(Point2::new(
+                        arc.center.x + arc.radius * angle.cos(),
+                        arc.center.y + arc.radius * angle.sin(),
+                    ));
+                }
+            }
+            points
+        }
+        EntityType::LwPolyline(polyline) => {
+            let vertices = &polyline.vertices;
+            let mut points = vertices
+                .iter()
+                .map(|vertex| Point2::new(vertex.location.x, vertex.location.y))
+                .collect::<Vec<_>>();
+            let count = if polyline.is_closed {
+                vertices.len()
+            } else {
+                vertices.len().saturating_sub(1)
+            };
+            for index in 0..count {
+                let a = &vertices[index];
+                let b = &vertices[(index + 1) % vertices.len()];
+                let p0 = Point2::new(a.location.x, a.location.y);
+                let p1 = Point2::new(b.location.x, b.location.y);
+                if let Some((center, radius, start, sweep)) = bulge_geometry(p0, p1, a.bulge) {
+                    for angle in [
+                        0.0,
+                        std::f64::consts::FRAC_PI_2,
+                        std::f64::consts::PI,
+                        3.0 * std::f64::consts::FRAC_PI_2,
+                    ] {
+                        if angle_on_sweep(angle, start, sweep) {
+                            points.push(Point2::new(
+                                center.x + radius * angle.cos(),
+                                center.y + radius * angle.sin(),
+                            ));
+                        }
+                    }
+                }
+            }
+            points
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn angle_on_sweep(angle: f64, start: f64, sweep: f64) -> bool {
+    let delta = if sweep >= 0.0 {
+        (angle - start).rem_euclid(std::f64::consts::TAU)
+    } else {
+        (start - angle).rem_euclid(std::f64::consts::TAU)
+    };
+    delta <= sweep.abs() + 1.0e-12
+}
+
+fn fit_view_to_drawing(
+    drawing: &DrawingDocument,
+    canvas: Rect,
+    zoom: &mut f32,
+    center: &mut Point2,
+    status: &mut String,
+) {
+    let hidden_layers = drawing
+        .layers()
+        .filter(|(_, frozen, off, _)| *frozen || *off)
+        .map(|(name, _, _, _)| name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let mut points = drawing
+        .model_space_entities()
+        .filter(|entity| !hidden_layers.contains(&entity.common().layer.to_ascii_lowercase()))
+        .flat_map(entity_extent_points)
+        .filter(|point| point.x.is_finite() && point.y.is_finite());
+    let Some(first) = points.next() else {
+        *status = "No visible LINE/ARC/Polyline geometry to fit".to_owned();
+        return;
+    };
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (first.x, first.x, first.y, first.y);
+    for point in points {
+        min_x = min_x.min(point.x);
+        max_x = max_x.max(point.x);
+        min_y = min_y.min(point.y);
+        max_y = max_y.max(point.y);
+    }
+    let width = (max_x - min_x).abs().max(1.0e-9);
+    let height = (max_y - min_y).abs().max(1.0e-9);
+    if !width.is_finite() || !height.is_finite() {
+        *status = "Drawing extents exceed view limits".to_owned();
+        return;
+    }
+    let available_width = f64::from((canvas.width() - 48.0).max(1.0));
+    let available_height = f64::from((canvas.height() - 48.0).max(1.0));
+    let fitted_zoom = (available_width / width).min(available_height / height);
+    if !fitted_zoom.is_finite() {
+        *status = "Drawing extents exceed view limits".to_owned();
+        return;
+    }
+    *zoom = fitted_zoom.clamp(f64::from(MIN_ZOOM), f64::from(MAX_ZOOM)) as f32;
+    *center = Point2::new(min_x * 0.5 + max_x * 0.5, min_y * 0.5 + max_y * 0.5);
+    *status = "Zoomed to visible geometry".to_owned();
 }
 
 fn segment_intersects_rect(a: Pos2, b: Pos2, rect: Rect) -> bool {
@@ -1895,7 +2104,7 @@ fn draw_grid(painter: &egui::Painter, rect: Rect, zoom: f32, center: Point2) {
 }
 
 fn grid_spacing(zoom: f32) -> f64 {
-    let target = f64::from(32.0 / zoom.max(0.01));
+    let target = f64::from(32.0 / zoom.max(MIN_ZOOM));
     let magnitude = 10.0_f64.powf(target.log10().floor());
     for multiplier in [1.0, 2.0, 5.0, 10.0] {
         let candidate = magnitude * multiplier;
@@ -2007,9 +2216,7 @@ fn draw_command_preview(
             }
             _ => {
                 if let Some(arc) = Arc2::through_three_points(pending[0], pending[1], cursor) {
-                    let count = ((arc.sweep() * f64::from(zoom) * arc.radius / 2.5).ceil()
-                        as usize)
-                        .clamp(12, 256);
+                    let count = arc_tessellation_count(arc.sweep(), arc.radius, zoom);
                     let points = (0..=count)
                         .map(|i| {
                             let angle = arc.start_angle + arc.sweep() * i as f64 / count as f64;
@@ -2068,7 +2275,7 @@ fn draw_cad_entity(
         }
         EntityType::Arc(arc) => {
             let sweep = (arc.end_angle - arc.start_angle).rem_euclid(std::f64::consts::TAU);
-            let n = ((sweep * f64::from(zoom) * arc.radius / 2.5).ceil() as usize).clamp(12, 256);
+            let n = arc_tessellation_count(sweep, arc.radius, zoom);
             let points = (0..=n)
                 .map(|i| {
                     let angle = arc.start_angle + sweep * i as f64 / n as f64;
@@ -2158,7 +2365,7 @@ fn draw_bulge_segment(
     let cx = midx - dy / chord * offset;
     let cy = midy + dx / chord * offset;
     let start = (y1 - cy).atan2(x1 - cx);
-    let n = ((sweep.abs() * radius * f64::from(zoom) / 2.5).ceil() as usize).clamp(8, 256);
+    let n = arc_tessellation_count(sweep, radius, zoom);
     let points = (0..=n)
         .map(|i| {
             let a = start + sweep * i as f64 / n as f64;
@@ -2173,14 +2380,38 @@ fn draw_bulge_segment(
     painter.add(egui::Shape::line(points, stroke));
 }
 
+fn arc_tessellation_count(sweep: f64, radius: f64, zoom: f32) -> usize {
+    let screen_radius = radius.abs() * f64::from(zoom.max(MIN_ZOOM));
+    if !screen_radius.is_finite() || screen_radius <= 0.35 {
+        return 8;
+    }
+    let max_step = 2.0 * (1.0 - 0.35 / screen_radius).clamp(-1.0, 1.0).acos();
+    if !max_step.is_finite() || max_step <= 0.0 {
+        return 2048;
+    }
+    ((sweep.abs() / max_step).ceil() as usize).clamp(8, 2048)
+}
+
 fn entity_pick_distance(entity: &EntityType, p: Point2) -> Option<f64> {
-    match entity {
+    if !p.x.is_finite() || !p.y.is_finite() {
+        return None;
+    }
+    let distance = match entity {
         EntityType::Line(l) => Some(point_segment_distance(
             p,
             Point2::new(l.start.x, l.start.y),
             Point2::new(l.end.x, l.end.y),
         )),
         EntityType::Arc(a) => {
+            if !a.center.x.is_finite()
+                || !a.center.y.is_finite()
+                || !a.radius.is_finite()
+                || a.radius <= 0.0
+                || !a.start_angle.is_finite()
+                || !a.end_angle.is_finite()
+            {
+                return None;
+            }
             let r = Point2::new(a.center.x, a.center.y).distance(p);
             let ang = (p.y - a.center.y).atan2(p.x - a.center.x);
             let sweep = (a.end_angle - a.start_angle).rem_euclid(std::f64::consts::TAU);
@@ -2225,10 +2456,21 @@ fn entity_pick_distance(entity: &EntityType, p: Point2) -> Option<f64> {
             distance.is_finite().then_some(distance)
         }
         _ => None,
-    }
+    }?;
+    (distance.is_finite() && distance >= 0.0).then_some(distance)
 }
 
 fn bulge_segment_distance(p: Point2, a: Point2, b: Point2, bulge: f64) -> f64 {
+    if !p.x.is_finite()
+        || !p.y.is_finite()
+        || !a.x.is_finite()
+        || !a.y.is_finite()
+        || !b.x.is_finite()
+        || !b.y.is_finite()
+        || !bulge.is_finite()
+    {
+        return f64::INFINITY;
+    }
     if bulge.abs() < 1e-10 {
         return point_segment_distance(p, a, b);
     }
@@ -2243,6 +2485,9 @@ fn bulge_segment_distance(p: Point2, a: Point2, b: Point2, bulge: f64) -> f64 {
     let offset = chord / (2.0 * (sweep / 2.0).tan());
     let cx = (a.x + b.x) / 2.0 - dy / chord * offset;
     let cy = (a.y + b.y) / 2.0 + dx / chord * offset;
+    if !radius.is_finite() || radius <= 0.0 || !cx.is_finite() || !cy.is_finite() {
+        return f64::INFINITY;
+    }
     let angle = (p.y - cy).atan2(p.x - cx);
     let start = (a.y - cy).atan2(a.x - cx);
     let delta = if sweep >= 0.0 {

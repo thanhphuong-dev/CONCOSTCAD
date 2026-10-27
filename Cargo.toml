@@ -5,9 +5,12 @@ edition = "2024"
 
 [dependencies]
 acadrust = { version = "0.6.7", default-features = false }
-eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "default_fonts", "glow"] }
-egui_dock = "0.21.1"
-rfd = { version = "0.17.2", default-features = false }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
