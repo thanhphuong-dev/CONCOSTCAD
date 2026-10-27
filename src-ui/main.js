@@ -283,6 +283,12 @@ function renderShell() {
             </div>
           </div>
           <div class="canvas-coords" id="canvasCoords">MODEL SPACE · GRID ON · UCS WORLD</div>
+          <div class="layout-tab-bar" id="layoutTabBar">
+            <button class="layout-tab active" data-space="model">Model</button>
+            <button class="layout-tab" data-space="layout1">Layout1</button>
+            <button class="layout-tab" data-space="layout2">Layout2</button>
+            <button class="layout-add-btn" id="addLayoutBtn" title="Thêm bố cục mới">＋</button>
+          </div>
           <div class="view-cube"><span>TOP</span><i></i><small>W</small></div>
           <div class="nav-wheel">⌖<br><span>−</span><br>＋</div>
         </div>
@@ -410,10 +416,41 @@ function bindShellEvents() {
   });
 
   bindCanvasEvents(viewportEl, canvasEl);
+
+  $(".layout-tab").forEach((btn) => {
+    btn.onclick = () => {
+      $(".layout-tab").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      activeSpace = btn.dataset.space;
+      setStatus(activeSpace === "model" ? "Không gian mô hình (Model Space)" : `Không gian giấy (Paper Space - ${activeSpace.toUpperCase()})`);
+      draw();
+    };
+  });
+  const addLayBtn = $("#addLayoutBtn");
+  if (addLayBtn) {
+    addLayBtn.onclick = () => {
+      const bar = $("#layoutTabBar");
+      const num = bar.querySelectorAll(".layout-tab").length;
+      const newBtn = document.createElement("button");
+      newBtn.className = "layout-tab";
+      newBtn.dataset.space = `layout${num}`;
+      newBtn.textContent = `Layout${num}`;
+      newBtn.onclick = () => {
+        $(".layout-tab").forEach((b) => b.classList.remove("active"));
+        newBtn.classList.add("active");
+        activeSpace = newBtn.dataset.space;
+        setStatus(`Không gian giấy (Paper Space - ${activeSpace.toUpperCase()})`);
+        draw();
+      };
+      bar.insertBefore(newBtn, addLayBtn);
+      newBtn.click();
+    };
+  }
   bindCommandBarEvents();
 }
 
 let showGrid = true;
+let activeSpace = "model";
 let lastTool = "line";
 let filletRadius = 0;
 let chamferDist = 5;
@@ -869,8 +906,72 @@ function draw() {
   const h = canvas.height / d;
   ctx.setTransform(d, 0, 0, d, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#101318";
-  ctx.fillRect(0, 0, w, h);
+
+  let paperBounds = null;
+  if (activeSpace !== "model") {
+    // Paper Space Desk Background
+    ctx.fillStyle = "#1a1f26";
+    ctx.fillRect(0, 0, w, h);
+
+    // Draw White Paper Sheet (ISO A3 landscape: 420x297mm)
+    const paperMargin = 32;
+    const maxPW = w - paperMargin * 2;
+    const maxPH = h - paperMargin * 2;
+    const aspect = 420 / 297;
+    let pw = maxPW, ph = pw / aspect;
+    if (ph > maxPH) {
+      ph = maxPH;
+      pw = ph * aspect;
+    }
+    const px = (w - pw) / 2;
+    const py = (h - ph) / 2;
+    paperBounds = { px, py, pw, ph };
+
+    // Drop Shadow
+    ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
+    ctx.shadowBlur = 16;
+    ctx.shadowOffsetY = 6;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(px, py, pw, ph);
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+
+    // Printable Margin
+    const bOffset = pw * 0.024;
+    ctx.strokeStyle = "#cbd5e1";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(px + bOffset, py + bOffset, pw - bOffset * 2, ph - bOffset * 2);
+    ctx.setLineDash([]);
+
+    // Title Block in Bottom Right
+    const tbW = pw * 0.34;
+    const tbH = ph * 0.19;
+    const tbx = px + pw - bOffset - tbW;
+    const tby = py + ph - bOffset - tbH;
+    ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = 1.4;
+    ctx.strokeRect(tbx, tby, tbW, tbH);
+
+    ctx.font = "bold 11px 'Inter', sans-serif";
+    ctx.fillStyle = "#0f172a";
+    ctx.fillText("CONCOSTCAD 2026 - DRAWING SHEET", tbx + 8, tby + 16);
+    ctx.font = "10px 'Inter', sans-serif";
+    ctx.fillStyle = "#475569";
+    const dwgTitle = (model.title || "Drawing1").split(/[\/]/).pop();
+    ctx.fillText(`Project: ${dwgTitle}`, tbx + 8, tby + 32);
+    ctx.fillText("Scale: 1:1  |  Format: ISO A3 (420x297mm)", tbx + 8, tby + 46);
+    ctx.fillText("Author: Engineer Thanh Phuong", tbx + 8, tby + 60);
+
+    // Clip Model entities inside Paper Space Viewport
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(px + bOffset, py + bOffset, pw - bOffset * 2, ph - bOffset * 2 - tbH);
+    ctx.clip();
+  } else {
+    ctx.fillStyle = "#101318";
+    ctx.fillRect(0, 0, w, h);
+  }
 
   // Draw Grid
   if (showGrid) {
@@ -1033,6 +1134,10 @@ function draw() {
   }
   ctx.shadowColor = "transparent";
   ctx.shadowBlur = 0;
+
+  if (activeSpace !== "model") {
+    ctx.restore();
+  }
 
   // Draw Window / Crossing Selection Box
   if (isBoxSelecting && boxStart && boxCurrent) {
@@ -1201,6 +1306,12 @@ function draw() {
   if (coordEl) coordEl.innerHTML = `X&nbsp; ${world.x.toFixed(3)}&nbsp;&nbsp; Y&nbsp; ${world.y.toFixed(3)}`;
   const zoomEl = $("#zoomReadout");
   if (zoomEl) zoomEl.textContent = `${Math.round(zoom * 100)}%`;
+  const coordsEl = $("#canvasCoords");
+  if (coordsEl) {
+    coordsEl.textContent = activeSpace === "model"
+      ? "MODEL SPACE · GRID ON · UCS WORLD"
+      : `PAPER SPACE (ISO A3) · 1:1 · ${activeSpace.toUpperCase()}`;
+  }
 }
 
 // Zoom Selected Entities (ZS / ZOOM OBJECT)
@@ -2488,6 +2599,16 @@ function bindCommandBarEvents() {
         if (cmd === "ZE" || cmd === "ZOOM EXTENTS") { zoomToExtents(); return; }
     if (cmd === "ZS" || cmd === "ZOOM SELECTED" || cmd === "ZOOM OBJECT") { zoomSelected(); return; }
     if (cmd === "EXPORT" || cmd === "PLOT" || cmd === "PRINT") { exportDrawingImage(); return; }
+    if (cmd === "MODEL" || cmd === "MS") {
+      const b = $("button[data-space='model']");
+      if (b) b.click();
+      return;
+    }
+    if (cmd === "LAYOUT" || cmd === "PS" || cmd === "PAPER") {
+      const b = $("button[data-space='layout1']");
+      if (b) b.click();
+      return;
+    }
     if (cmd === "SPLINE" || cmd === "SPL") { chooseTool("spline"); return; }
     if (cmd === "REVCLOUD" || cmd === "CLOUD") { chooseTool("revcloud"); return; }
     if (cmd === "HATCH" || cmd === "H") { chooseTool("hatch"); return; }

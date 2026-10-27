@@ -970,3 +970,59 @@ button {
 .layer-swatch:hover {
   transform: scale(1.35);
 }
+
+/* Model & Paper Space Layout Tabs */
+.layout-tab-bar {
+  position: absolute;
+  left: 14px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  background: rgba(22, 27, 34, 0.92);
+  border: 1px solid #374151;
+  border-radius: 4px;
+  padding: 2px 3px;
+  gap: 2px;
+  backdrop-filter: blur(8px);
+  z-index: 25;
+}
+
+.layout-tab {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.layout-tab:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f1f5f9;
+}
+
+.layout-tab.active {
+  background: #2563eb;
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.layout-add-btn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  font-size: 13px;
+  padding: 3px 6px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.layout-add-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #38bdf8;
+}
