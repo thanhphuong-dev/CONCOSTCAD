@@ -2,7 +2,7 @@ mod document;
 mod geometry;
 
 use acadrust::entities::{EntityType, LwVertex};
-use acadrust::types::Vector2;
+use acadrust::types::{Handle, Vector2};
 use document::DrawingDocument;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -49,11 +49,27 @@ enum EntityView {
         start: f64,
         end: f64,
     },
+    Circle {
+        handle: u64,
+        layer: String,
+        cx: f64,
+        cy: f64,
+        radius: f64,
+    },
     Polyline {
         handle: u64,
         layer: String,
         closed: bool,
         points: Vec<VertexView>,
+    },
+    Text {
+        handle: u64,
+        layer: String,
+        text: String,
+        x: f64,
+        y: f64,
+        height: f64,
+        rotation: f64,
     },
 }
 
@@ -88,6 +104,22 @@ fn snapshot(drawing: &DrawingDocument) -> CadSnapshot {
                     radius: arc.radius,
                     start: arc.start_angle,
                     end: arc.end_angle,
+                }),
+                EntityType::Circle(circle) => Some(EntityView::Circle {
+                    handle,
+                    layer,
+                    cx: circle.center.x,
+                    cy: circle.center.y,
+                    radius: circle.radius,
+                }),
+                EntityType::Text(text) => Some(EntityView::Text {
+                    handle,
+                    layer,
+                    text: text.value.clone(),
+                    x: text.insertion_point.x,
+                    y: text.insertion_point.y,
+                    height: text.height,
+                    rotation: text.rotation,
                 }),
                 EntityType::LwPolyline(poly) => Some(EntityView::Polyline {
                     handle,
@@ -213,6 +245,301 @@ fn undo(state: State<'_, CadState>) -> Result<CadSnapshot, String> {
     Ok(snapshot(&drawing))
 }
 
+#[tauri::command]
+fn redo(state: State<'_, CadState>) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.redo();
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn erase_entities(handles: Vec<u64>, state: State<'_, CadState>) -> Result<CadSnapshot, String> {
+    let handles = handles.into_iter().map(Handle::new).collect::<Vec<_>>();
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.erase_many(&handles)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn move_entities(
+    handles: Vec<u64>,
+    dx: f64,
+    dy: f64,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let handles = handles.into_iter().map(Handle::new).collect::<Vec<_>>();
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.translate_many(&handles, dx, dy)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn add_layer(name: String, state: State<'_, CadState>) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.add_layer(&name)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn set_current_layer(name: String, state: State<'_, CadState>) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.set_current_layer(&name)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn set_entity_layer(
+    handle: u64,
+    layer: String,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.set_entity_layer(Handle::new(handle), &layer)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn copy_entities(
+    handles: Vec<u64>,
+    dx: f64,
+    dy: f64,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let handles = handles.into_iter().map(Handle::new).collect::<Vec<_>>();
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.copy_many(&handles, dx, dy)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn rotate_entities(
+    handles: Vec<u64>,
+    cx: f64,
+    cy: f64,
+    angle_deg: f64,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let handles = handles.into_iter().map(Handle::new).collect::<Vec<_>>();
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    let rad = angle_deg * std::f64::consts::PI / 180.0;
+    drawing.rotate_many(&handles, cx, cy, rad)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn mirror_entities(
+    handles: Vec<u64>,
+    p1_x: f64,
+    p1_y: f64,
+    p2_x: f64,
+    p2_y: f64,
+    keep_source: bool,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let handles = handles.into_iter().map(Handle::new).collect::<Vec<_>>();
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.mirror_many(&handles, p1_x, p1_y, p2_x, p2_y, keep_source)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn update_line(
+    handle: u64,
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.replace_line(Handle::new(handle), Vector2::new(x1, y1), Vector2::new(x2, y2))?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn update_arc(
+    handle: u64,
+    x: f64,
+    y: f64,
+    radius: f64,
+    start: f64,
+    end: f64,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.replace_arc(Handle::new(handle), Vector2::new(x, y), radius, start, end)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn update_polyline(
+    handle: u64,
+    points: Vec<[f64; 3]>,
+    closed: bool,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let vertices = points
+        .into_iter()
+        .map(|p| {
+            let mut v = LwVertex::new(Vector2::new(p[0], p[1]));
+            v.bulge = p[2];
+            v
+        })
+        .collect::<Vec<_>>();
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.replace_polyline(Handle::new(handle), &vertices, closed)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn explode_entity(handle: u64, state: State<'_, CadState>) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.explode_entity(Handle::new(handle))?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn offset_entity(
+    handle: u64,
+    distance: f64,
+    side_x: f64,
+    side_y: f64,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.offset_entity(Handle::new(handle), distance, Vector2::new(side_x, side_y))?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn set_layer_flags(
+    name: String,
+    frozen: bool,
+    off: bool,
+    locked: bool,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.set_layer_flags(&name, frozen, off, locked)?;
+    Ok(snapshot(&drawing))
+}
+
+
+#[tauri::command]
+fn add_circle(
+    cx: f64,
+    cy: f64,
+    radius: f64,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.add_circle(Vector2::new(cx, cy), radius)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn update_circle(
+    handle: u64,
+    cx: f64,
+    cy: f64,
+    radius: f64,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.replace_circle(Handle::from(handle), Vector2::new(cx, cy), radius)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn add_text(
+    value: String,
+    x: f64,
+    y: f64,
+    height: f64,
+    rotation: f64,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.add_text(&value, Vector2::new(x, y), height, rotation)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn update_text(
+    handle: u64,
+    value: String,
+    x: f64,
+    y: f64,
+    height: f64,
+    rotation: f64,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.replace_text(Handle::from(handle), &value, Vector2::new(x, y), height, rotation)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn join_entities(handles: Vec<u64>, state: State<'_, CadState>) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    let rust_handles: Vec<Handle> = handles.into_iter().map(Handle::from).collect();
+    drawing.join_entities(&rust_handles)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn fillet_lines(
+    h1: u64,
+    h2: u64,
+    radius: f64,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.fillet_lines(Handle::from(h1), Handle::from(h2), radius)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn chamfer_lines(
+    h1: u64,
+    h2: u64,
+    d1: f64,
+    d2: f64,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    drawing.chamfer_lines(Handle::from(h1), Handle::from(h2), d1, d2)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn trim_line(
+    target_handle: u64,
+    click_x: f64,
+    click_y: f64,
+    cutter_handles: Vec<u64>,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    let cutters: Vec<Handle> = cutter_handles.into_iter().map(Handle::from).collect();
+    drawing.trim_line(Handle::from(target_handle), click_x, click_y, &cutters)?;
+    Ok(snapshot(&drawing))
+}
+
+#[tauri::command]
+fn extend_line(
+    target_handle: u64,
+    click_x: f64,
+    click_y: f64,
+    boundary_handles: Vec<u64>,
+    state: State<'_, CadState>,
+) -> Result<CadSnapshot, String> {
+    let mut drawing = state.0.lock().map_err(|e| e.to_string())?;
+    let boundaries: Vec<Handle> = boundary_handles.into_iter().map(Handle::from).collect();
+    drawing.extend_line(Handle::from(target_handle), click_x, click_y, &boundaries)?;
+    Ok(snapshot(&drawing))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -225,7 +552,31 @@ fn main() {
             add_line,
             add_arc,
             add_polyline,
-            undo
+            undo,
+            redo,
+            erase_entities,
+            move_entities,
+            add_layer,
+            set_current_layer,
+            set_entity_layer,
+            set_layer_flags,
+            copy_entities,
+            rotate_entities,
+            mirror_entities,
+            update_line,
+            update_arc,
+            update_polyline,
+            explode_entity,
+            offset_entity,
+            add_circle,
+            update_circle,
+            add_text,
+            update_text,
+            join_entities,
+            fillet_lines,
+            chamfer_lines,
+            trim_line,
+            extend_line,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CONCOSTCAD");

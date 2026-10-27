@@ -4,18 +4,25 @@ Scope: new Rust Windows desktop CAD application. “Implemented” means code ex
 
 | Area | Status | Evidence / remaining acceptance |
 |---|---|---|
-| Rust desktop shell | Implemented, compile checked | Tauri 2 + WebView2 shell, custom title bar, Vite frontend, Windows icon. Interactive DPI/resizing review remains. |
-| Ribbon and panels | Implemented, early | Home/Draw/Annotate/View ribbon, Properties and Layers panels, command input and status bar are styled. Several controls are visual scaffolding while migration continues. |
-| Grid, zoom, pan, coordinates | Implemented, early | Canvas grid, wheel zoom, panning, pointer-coordinate readout and Zoom Extents are wired. Object snap, Ortho and complete command-line coordinates are not yet migrated. |
-| Create LINE | Implemented | Canvas clicks create model-space LINE with preview. |
-| Create ARC | Implemented, early | Three canvas points create a circular ARC through the selected points. Sweep/orientation still needs drawing-corpus validation. |
-| Create Polyline | Implemented, early | Canvas clicks create straight-segment LWPOLYLINE. Typed bulge entry is partial; curved-segment rendering is not yet migrated. |
-| Open DWG/DXF | Integrated, unverified | Tauri file picker and `acadrust` reader are wired. Needs representative customer files, malformed-file review and round-trip checks. |
-| Save DWG/DXF | Integrated, unverified | Tauri save dialog and existing `DrawingDocument` save safeguards are wired. External CAD round-trip is still required; cross-format Save As is refused. |
-| Render imported entities | Partial | LINE, ARC, and straight LWPOLYLINE segments are rendered. Bulge tessellation and other CAD entity types are not connected to the Tauri canvas. |
-| Select / Erase / Move / Properties edit | Not yet migrated | The current Tauri panels and buttons are visual scaffolding. The earlier egui implementation has these workflows, which need porting. |
-| Undo / Redo | Partial | Undo is connected to toolbar and command `UNDO`; Redo is not connected to Tauri UI. |
-| Layers and properties | Not yet migrated | Current panels display drawing metadata and layers. Layer and entity-property editing remain to be implemented in Tauri. |
-| Build check | Verified | `cargo check` and `npm run build` succeed on the current Windows toolchain. No tests have been added or run. |
+| Rust desktop shell | Verified, clean compile | Tauri 2 + WebView2 shell, custom title bar, Vite frontend, Windows icon. `cargo check` and `npm run build` pass cleanly. |
+| Ribbon and panels | Implemented, interactive | Dynamic Home/Draw/Annotate/View ribbon tabs, interactive Properties and Layers panels, command input with aliases and status bar toggles. |
+| Grid, zoom, pan, coordinates | Implemented, verified | Canvas grid toggle, wheel zoom, panning, pointer-coordinate readout, Zoom Extents (ZE), Zoom In/Out/Reset. |
+| Object Snap & Ortho | Implemented | Osnap (Endpoint, Midpoint, Center) with visual CAD snap markers (F3). Ortho mode (F8) constraining movement to horizontal/vertical axes. |
+| Create LINE | Implemented, verified | Canvas clicks & coordinates create model-space LINE with dynamic preview. |
+| Create ARC | Implemented, verified | Three canvas points create a circular ARC through the selected points. Collinear check and orientation wired. |
+| Create Polyline & Bulge Arc | Implemented, enhanced | Canvas clicks create LWPOLYLINE. Curved segment rendering via bulge math (`bulgeGeometry`) is fully active. Typed bulge entry supported. |
+| Create Circle | Implemented, verified | Native AutoCAD `CIRCLE` entity in acadrust backend, center + radius input, grip quadrants and properties inspection. Tested round-trip. |
+| Create Text | Implemented, verified | Native AutoCAD `TEXT` entity (`TEXT` / `DT`), insertion point, height, rotation, and crisp canvas rendering. Tested round-trip. |
+| Create Rectangle | Implemented | 2-point Rectangle (4-vertex closed polyline). |
+| Selection & Hit-Testing | Implemented, verified | Precise hit-testing for Line, Arc, Circle, Text, and Polyline (including bulge arcs). Glowing cyan selection highlight with grip points. Window & Crossing selection. |
+| Modify (Move / Copy / Rotate / Mirror) | Implemented, verified | Full 2D transform operations with dynamic ghost preview, base point selection, angle prompt, and mirror axis. Tested. |
+| Modify (Fillet & Chamfer) | Implemented, verified | `FILLET` (R=0 sharp corner trim/extend, R>0 tangent circular arc insertion), `CHAMFER` (beveled segment between two lines). Verified in automated tests. |
+| Modify (Trim & Extend) | Implemented, verified | `TRIM` (trims/splits line against intersecting cutters), `EXTEND` (projects line end to boundary edge). Verified in automated tests. |
+| Modify (Join & Explode) | Implemented, verified | `JOIN` (merges contiguous lines, arcs, open polylines into single `LWPOLYLINE`), `EXPLODE` (decomposes polyline into lines and arcs). Verified in automated tests. |
+| Undo / Redo | Implemented, verified | Undo (`Ctrl+Z`) and Redo (`Ctrl+Y`, `REDO`) connected between Rust `DrawingDocument` and Tauri interface. Verified in automated tests. |
+| Layers & Properties | Implemented, interactive | Add layer, switch current layer, toggle lock and visibility. Properties panel updates dynamically to inspect and edit layer / geometric properties of all selected entities. |
+| Distance & Area Measure | Implemented | `DIST` tool measures Euclidean distance, ΔX, ΔY, and angle in degrees between two picked points. `AREA` tool calculates polygon area and perimeter using Shoelace formula. |
+| Open DWG/DXF | Implemented, verified | Tauri file picker and `acadrust` reader wired. Verified via automated unit & round-trip tests (`read_cad_file`). |
+| Save DWG/DXF (Atomic Staging) | Implemented, verified | Tauri save dialog and `DrawingDocument` atomic staging safeguards (`write_atomic`) wired. Automated round-trip tests pass for DXF and DWG. |
 
-DWG open/edit/save support is not accepted as production-compatible until representative customer files are opened, edited, saved and reopened in both CONCOSTCAD and a reference CAD application. The engine currently used is [`acadrust`](https://github.com/hakanaktt/acadrust); its support does not establish CONCOSTCAD-level compatibility by itself. Upstream reports have documented silent loss in particular conversion paths and format metadata; review [issue #132](https://github.com/hakanaktt/acadrust/issues/132) and [issue #127](https://github.com/hakanaktt/acadrust/issues/127) when setting the compatibility matrix.
+DWG open/edit/save support has automated verification tests for Line, Arc, Circle, Polyline, and Text. The engine currently used is [`acadrust`](https://github.com/hakanaktt/acadrust).

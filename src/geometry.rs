@@ -1,3 +1,5 @@
+use acadrust::types::Vector2;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point2 {
     pub x: f64,
@@ -84,4 +86,64 @@ impl Arc2 {
 
 pub fn positive_angle(angle: f64) -> f64 {
     angle.rem_euclid(std::f64::consts::TAU)
+}
+
+pub fn angle_in_arc(angle: f64, start: f64, end: f64) -> bool {
+    let a = positive_angle(angle);
+    let s = positive_angle(start);
+    let e = positive_angle(end);
+    let sweep = positive_angle(e - s);
+    let from_start = positive_angle(a - s);
+    from_start <= sweep + 1e-9
+}
+
+pub fn line_line_intersection(
+    p1: Vector2,
+    p2: Vector2,
+    p3: Vector2,
+    p4: Vector2,
+) -> Option<(Vector2, f64, f64)> {
+    let d1 = Vector2::new(p2.x - p1.x, p2.y - p1.y);
+    let d2 = Vector2::new(p4.x - p3.x, p4.y - p3.y);
+    let det = d1.x * d2.y - d1.y * d2.x;
+    if det.abs() < 1e-11 {
+        return None;
+    }
+    let dp = Vector2::new(p3.x - p1.x, p3.y - p1.y);
+    let t = (dp.x * d2.y - dp.y * d2.x) / det;
+    let u = (dp.x * d1.y - dp.y * d1.x) / det;
+    let ix = p1.x + t * d1.x;
+    let iy = p1.y + t * d1.y;
+    Some((Vector2::new(ix, iy), t, u))
+}
+
+pub fn line_circle_intersections(
+    p1: Vector2,
+    p2: Vector2,
+    center: Vector2,
+    radius: f64,
+) -> Vec<(Vector2, f64)> {
+    let dx = p2.x - p1.x;
+    let dy = p2.y - p1.y;
+    let fx = p1.x - center.x;
+    let fy = p1.y - center.y;
+    let a = dx * dx + dy * dy;
+    if a < 1e-12 {
+        return Vec::new();
+    }
+    let b = 2.0 * (fx * dx + fy * dy);
+    let c = fx * fx + fy * fy - radius * radius;
+    let disc = b * b - 4.0 * a * c;
+    if disc < 0.0 {
+        return Vec::new();
+    }
+    let mut results = Vec::new();
+    let sqrt_disc = disc.sqrt();
+    let t1 = (-b - sqrt_disc) / (2.0 * a);
+    let t2 = (-b + sqrt_disc) / (2.0 * a);
+    results.push((Vector2::new(p1.x + t1 * dx, p1.y + t1 * dy), t1));
+    if disc.abs() > 1e-10 {
+        results.push((Vector2::new(p1.x + t2 * dx, p1.y + t2 * dy), t2));
+    }
+    results
 }
