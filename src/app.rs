@@ -278,7 +278,10 @@ impl CadApp {
                             self.status = "Add Polyline vertices before closing".to_owned();
                         }
                     }
-                    _ => self.status = "Closing bulge must be finite with magnitude at most 1000000".to_owned(),
+                    _ => {
+                        self.status =
+                            "Closing bulge must be finite with magnitude at most 1000000".to_owned()
+                    }
                 }
                 return;
             }
@@ -358,10 +361,20 @@ impl CadApp {
             }
             "E" | "ERASE" => self.erase_selection(),
             "U" | "UNDO" => {
-                self.drawing.undo();
+                if self.drawing.undo() {
+                    self.selection.clear();
+                    self.status = "Undo completed".to_owned();
+                } else {
+                    self.status = "Nothing to undo".to_owned();
+                }
             }
             "REDO" => {
-                self.drawing.redo();
+                if self.drawing.redo() {
+                    self.selection.clear();
+                    self.status = "Redo completed".to_owned();
+                } else {
+                    self.status = "Nothing to redo".to_owned();
+                }
             }
             "ORTHO" => {
                 self.ortho_enabled = !self.ortho_enabled;
@@ -622,12 +635,20 @@ impl eframe::App for CadApp {
             self.open_dialog();
         }
         if undo {
-            self.drawing.undo();
-            self.selection.clear();
+            if self.drawing.undo() {
+                self.selection.clear();
+                self.status = "Undo completed".to_owned();
+            } else {
+                self.status = "Nothing to undo".to_owned();
+            }
         }
         if redo {
-            self.drawing.redo();
-            self.selection.clear();
+            if self.drawing.redo() {
+                self.selection.clear();
+                self.status = "Redo completed".to_owned();
+            } else {
+                self.status = "Nothing to redo".to_owned();
+            }
         }
         if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.pending_points.clear();
@@ -988,10 +1009,23 @@ impl WorkspaceViewer<'_> {
             }
         } else if !self.pending_points.is_empty() {
             if *self.tool == Tool::Polyline {
-                draw_pending_polyline(&painter, rect, *self.zoom, *self.world_center,
-                    self.pending_points, self.pending_bulges, None);
+                draw_pending_polyline(
+                    &painter,
+                    rect,
+                    *self.zoom,
+                    *self.world_center,
+                    self.pending_points,
+                    self.pending_bulges,
+                    None,
+                );
             } else {
-                draw_pending_points(&painter, rect, *self.zoom, *self.world_center, self.pending_points);
+                draw_pending_points(
+                    &painter,
+                    rect,
+                    *self.zoom,
+                    *self.world_center,
+                    self.pending_points,
+                );
             }
         }
         let wheel = ui.input(|input| input.smooth_scroll_delta.y);
@@ -1492,13 +1526,22 @@ fn handle_point(
     match *tool {
         Tool::Select => {
             selection.clear();
-            if let Some(handle) = drawing.model_space_entities().find_map(|entity| {
-                let hidden = drawing.layers().any(|(name, frozen, off, _)| {
-                    name.eq_ignore_ascii_case(&entity.common().layer) && (frozen || off)
-                });
-                (!hidden && hit_test(entity, point, 8.0 / f64::from(zoom.max(0.1))))
-                    .then_some(entity.common().handle)
-            }) {
+            let tolerance = 8.0 / f64::from(zoom.max(0.1));
+            if let Some((handle, _)) = drawing
+                .model_space_entities()
+                .filter_map(|entity| {
+                    let hidden = drawing.layers().any(|(name, frozen, off, _)| {
+                        name.eq_ignore_ascii_case(&entity.common().layer) && (frozen || off)
+                    });
+                    if hidden {
+                        return None;
+                    }
+                    entity_pick_distance(entity, point)
+                        .filter(|distance| *distance <= tolerance)
+                        .map(|distance| (entity.common().handle, distance))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+            {
                 selection.push(handle);
             }
             *status = if !selection.is_empty() {
@@ -1882,6 +1925,46 @@ fn draw_pending_points(
     }
 }
 
+fn draw_pending_polyline(
+    painter: &egui::Painter,
+    rect: Rect,
+    zoom: f32,
+    center: Point2,
+    vertices: &[Point2],
+    bulges: &[f64],
+    cursor: Option<Point2>,
+) {
+    let stroke = Stroke::new(1.7, Color32::from_rgb(233, 190, 91));
+    for index in 0..vertices.len().saturating_sub(1) {
+        draw_bulge_segment(
+            painter,
+            rect,
+            zoom,
+            center,
+            vertices[index].x,
+            vertices[index].y,
+            vertices[index + 1].x,
+            vertices[index + 1].y,
+            bulges.get(index).copied().unwrap_or(0.0),
+            stroke,
+        );
+    }
+    if let (Some(last), Some(cursor)) = (vertices.last(), cursor) {
+        draw_bulge_segment(
+            painter,
+            rect,
+            zoom,
+            center,
+            last.x,
+            last.y,
+            cursor.x,
+            cursor.y,
+            bulges.get(vertices.len() - 1).copied().unwrap_or(0.0),
+            stroke,
+        );
+    }
+}
+
 fn draw_command_preview(
     painter: &egui::Painter,
     rect: Rect,
@@ -2090,59 +2173,70 @@ fn draw_bulge_segment(
     painter.add(egui::Shape::line(points, stroke));
 }
 
-fn hit_test(entity: &EntityType, p: Point2, tol: f64) -> bool {
+fn entity_pick_distance(entity: &EntityType, p: Point2) -> Option<f64> {
     match entity {
-        EntityType::Line(l) => {
-            point_segment_distance(
-                p,
-                Point2::new(l.start.x, l.start.y),
-                Point2::new(l.end.x, l.end.y),
-            ) <= tol
-        }
+        EntityType::Line(l) => Some(point_segment_distance(
+            p,
+            Point2::new(l.start.x, l.start.y),
+            Point2::new(l.end.x, l.end.y),
+        )),
         EntityType::Arc(a) => {
             let r = Point2::new(a.center.x, a.center.y).distance(p);
             let ang = (p.y - a.center.y).atan2(p.x - a.center.x);
             let sweep = (a.end_angle - a.start_angle).rem_euclid(std::f64::consts::TAU);
             let along = (ang - a.start_angle).rem_euclid(std::f64::consts::TAU) <= sweep;
-            along && (r - a.radius).abs() <= tol
+            let start = Point2::new(
+                a.center.x + a.radius * a.start_angle.cos(),
+                a.center.y + a.radius * a.start_angle.sin(),
+            );
+            let end = Point2::new(
+                a.center.x + a.radius * a.end_angle.cos(),
+                a.center.y + a.radius * a.end_angle.sin(),
+            );
+            Some(if along {
+                (r - a.radius).abs()
+            } else {
+                p.distance(start).min(p.distance(end))
+            })
         }
         EntityType::LwPolyline(poly) => {
             let vs = &poly.vertices;
-            let mut hit = vs.windows(2).any(|w| {
-                hit_bulge_segment(
-                    p,
-                    tol,
-                    Point2::new(w[0].location.x, w[0].location.y),
-                    Point2::new(w[1].location.x, w[1].location.y),
-                    w[0].bulge,
-                )
-            });
+            let mut distance = vs
+                .windows(2)
+                .map(|w| {
+                    bulge_segment_distance(
+                        p,
+                        Point2::new(w[0].location.x, w[0].location.y),
+                        Point2::new(w[1].location.x, w[1].location.y),
+                        w[0].bulge,
+                    )
+                })
+                .fold(f64::INFINITY, f64::min);
             if poly.is_closed && vs.len() > 2 {
                 let a = vs[vs.len() - 1];
                 let b = vs[0];
-                hit |= hit_bulge_segment(
+                distance = distance.min(bulge_segment_distance(
                     p,
-                    tol,
                     Point2::new(a.location.x, a.location.y),
                     Point2::new(b.location.x, b.location.y),
                     a.bulge,
-                );
+                ));
             }
-            hit
+            distance.is_finite().then_some(distance)
         }
-        _ => false,
+        _ => None,
     }
 }
 
-fn hit_bulge_segment(p: Point2, tol: f64, a: Point2, b: Point2, bulge: f64) -> bool {
+fn bulge_segment_distance(p: Point2, a: Point2, b: Point2, bulge: f64) -> f64 {
     if bulge.abs() < 1e-10 {
-        return point_segment_distance(p, a, b) <= tol;
+        return point_segment_distance(p, a, b);
     }
     let dx = b.x - a.x;
     let dy = b.y - a.y;
     let chord = dx.hypot(dy);
     if chord == 0.0 {
-        return p.distance(a) <= tol;
+        return p.distance(a);
     }
     let sweep = 4.0 * bulge.atan();
     let radius = chord / (2.0 * (sweep.abs() / 2.0).sin());
@@ -2156,7 +2250,11 @@ fn hit_bulge_segment(p: Point2, tol: f64, a: Point2, b: Point2, bulge: f64) -> b
     } else {
         (start - angle).rem_euclid(std::f64::consts::TAU)
     };
-    delta <= sweep.abs() && (Point2::new(cx, cy).distance(p) - radius).abs() <= tol
+    if delta <= sweep.abs() {
+        (Point2::new(cx, cy).distance(p) - radius).abs()
+    } else {
+        p.distance(a).min(p.distance(b))
+    }
 }
 
 #[derive(Clone, Copy)]

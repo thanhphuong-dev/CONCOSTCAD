@@ -266,8 +266,12 @@ impl DrawingDocument {
         if layer.flags.locked || layer.flags.off || layer.flags.frozen {
             return Err("Cannot assign an entity to a locked, off, or frozen layer".to_owned());
         }
-        if self.cad.get_entity(handle).is_none() {
-            return Err("Selected entity no longer exists".to_owned());
+        let entity = self
+            .cad
+            .get_entity(handle)
+            .ok_or("Selected entity no longer exists")?;
+        if entity.common().layer.eq_ignore_ascii_case(name) {
+            return Ok(());
         }
         self.begin_change();
         if let Some(entity) = self.cad.get_entity_mut(handle) {
@@ -329,6 +333,15 @@ impl DrawingDocument {
         if !matches!(self.cad.get_entity(handle), Some(EntityType::Line(_))) {
             return Err("Selected entity is not a LINE".to_owned());
         }
+        if let Some(EntityType::Line(line)) = self.cad.get_entity(handle) {
+            if line.start.x == start.x
+                && line.start.y == start.y
+                && line.end.x == end.x
+                && line.end.y == end.y
+            {
+                return Ok(());
+            }
+        }
         self.ensure_entity_layer_editable(handle)?;
         self.begin_change();
         if let Some(EntityType::Line(line)) = self.cad.get_entity_mut(handle) {
@@ -368,6 +381,16 @@ impl DrawingDocument {
         if !matches!(self.cad.get_entity(handle), Some(EntityType::Arc(_))) {
             return Err("Selected entity is not an ARC".to_owned());
         }
+        if let Some(EntityType::Arc(arc)) = self.cad.get_entity(handle) {
+            if arc.center.x == center.x
+                && arc.center.y == center.y
+                && arc.radius == radius
+                && arc.start_angle == start
+                && arc.end_angle == end
+            {
+                return Ok(());
+            }
+        }
         self.ensure_entity_layer_editable(handle)?;
         self.begin_change();
         if let Some(EntityType::Arc(arc)) = self.cad.get_entity_mut(handle) {
@@ -401,6 +424,19 @@ impl DrawingDocument {
         validate_polyline_vertices(vertices, closed)?;
         if !matches!(self.cad.get_entity(handle), Some(EntityType::LwPolyline(_))) {
             return Err("Selected entity is not a lightweight Polyline".to_owned());
+        }
+        if let Some(EntityType::LwPolyline(poly)) = self.cad.get_entity(handle) {
+            if poly.is_closed == closed
+                && poly.vertices.len() == vertices.len()
+                && poly.vertices.iter().zip(vertices).all(|(a, b)| {
+                    a.location == b.location
+                        && a.bulge == b.bulge
+                        && a.start_width == b.start_width
+                        && a.end_width == b.end_width
+                })
+            {
+                return Ok(());
+            }
         }
         self.ensure_entity_layer_editable(handle)?;
         self.begin_change();
@@ -491,7 +527,7 @@ impl DrawingDocument {
             return Err("Move offset must be finite".to_owned());
         }
         let handles = unique_handles(handles);
-        if handles.is_empty() {
+        if handles.is_empty() || (dx == 0.0 && dy == 0.0) {
             return Ok(());
         }
         for handle in &handles {
