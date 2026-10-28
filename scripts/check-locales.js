@@ -5,12 +5,12 @@ import { getMissingTranslationKeys, i18n, supportedLanguages } from "../src-ui/l
 const sourcePath = fileURLToPath(new URL("../src-ui/main.js", import.meta.url));
 const source = readFileSync(sourcePath, "utf8");
 const referencedKeys = new Set();
-const callPattern = /(?:^|[^A-Za-z0-9_$.])t\(\s*([^)]*)\)/g;
+const callPattern = /(?:^|[^A-Za-z0-9_$.])(?:t|tf)\(\s*([^)]*)\)/g;
 const keyPattern = /["']([a-z][a-z0-9_]*)["']/g;
 
 for (const call of source.matchAll(callPattern)) {
   const args = call[1].trim();
-  const directKey = args.match(/^["']([a-z][a-z0-9_]*)["']$/);
+  const directKey = args.match(/^["']([a-z][a-z0-9_]*)["'](?:\s*,|\s*$)/);
   if (directKey) {
     referencedKeys.add(directKey[1]);
     continue;

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CONCOSTCAD Ribbon frontend preview</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      // Manual frontend fixture. Geometry/file acceptance still requires Tauri/Rust.
+      import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
+      let nextHandle = 10;
+      let snapshot = {
+        documentId: 1, title: 'Drawing1', dirty: false, entityCount: 0, currentLayer: '0',
+        layers: [{ handle: '1', name: '0', color: '#79c9dc', frozen: false, off: false, locked: false }],
+        entities: [], documents: [{ id: 1, title: 'Drawing1', dirty: false }],
+      };
+      mockWindows('main');
+      mockIPC((command, args) => {
+        if (command.startsWith('plugin:window|')) return false;
+        if (command === 'get_snapshot') return structuredClone(snapshot);
+        if (command === 'hit_test_entity') return null;
+        if (command === 'autosave_drawings') return [];
+        if (command === 'new_drawing') {
+          snapshot.entities = [];
+          snapshot.entityCount = 0;
+          snapshot.dirty = false;
+        } else if (command === 'add_layer') {
+          snapshot.layers.push({ handle: String(nextHandle++), name: args.name, color: '#79c9dc', frozen: false, off: false, locked: false });
+        } else if (command === 'set_current_layer') {
+          snapshot.currentLayer = args.name;
+        } else if (command === 'set_layer_flags') {
+          Object.assign(snapshot.layers.find((layer) => layer.name === args.name), args);
+        } else if (command === 'set_layer_color') {
+          snapshot.layers.find((layer) => layer.name === args.name).color = args.hex;
+        } else if (command === 'add_polyline') {
+          snapshot.entities.push({ handle: String(nextHandle++), kind: 'polyline', layer: snapshot.currentLayer,
+            points: args.points.map(([x, y, bulge = 0]) => ({ x, y, bulge })), closed: args.closed });
+          snapshot.entityCount = snapshot.entities.length;
+        } else {
+          throw new Error(`Frontend preview does not implement ${command}`);
+        }
+        if (command !== 'new_drawing') snapshot.dirty = true;
+        snapshot.documents[0].dirty = snapshot.dirty;
+        return structuredClone(snapshot);
+      }, { shouldMockEvents: true });
+      await import('/src-ui/main.js');
+    </script>
+  </body>
+</html>

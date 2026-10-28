@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { bindViewCube, normalizeRotation, rotationAroundCenter, updateViewCube } from "./view-cube.js";
 import { normalizeCommand } from "./command-aliases.js";
 import { cadShortcut, mountShellEvents } from "./shell-events.js";
+import { bindRibbonTabs, mountRibbonFlyouts, mountRibbonOverflow, syncRibbonControls, syncRibbonTabs } from "./ribbon.js";
 import { supportedLanguages, translate } from "./locales.js";
 import "./style.css";
 
@@ -278,6 +279,9 @@ let cursorViewportPosition = null;
 let closeGuardBound = false;
 let menuDismissBound = false;
 let shellEvents = null;
+let ribbonTabsBinding = null;
+let ribbonOverflow = null;
+let ribbonFlyouts = null;
 let appWindowRef = null;
 let windowCloseAllowed = false;
 let closeConfirmationPending = false;
@@ -340,6 +344,12 @@ const app = $("#app");
 // Render Base Shell
 function renderShell() {
   shellEvents?.dispose();
+  ribbonTabsBinding?.dispose();
+  ribbonOverflow?.dispose();
+  ribbonFlyouts?.dispose();
+  ribbonTabsBinding = null;
+  ribbonOverflow = null;
+  ribbonFlyouts = null;
   cursorViewportPosition = null;
   document.body.classList.remove("resizing-palette", "resizing-palette-width", "resizing-commandbar");
   const recent = getRecentDrawings();
@@ -454,17 +464,23 @@ function renderShell() {
       </details>
       <span class="menu-bar-spacer" data-tauri-drag-region></span>
     </nav>
-    <nav class="tabs" id="ribbonTabs">
+    <nav class="tabs" aria-label="${t("ribbon_navigation_aria")}">
+      <div class="ribbon-tab-list" id="ribbonTabs" role="tablist" aria-label="${t("ribbon_tabs_aria")}">
       <button class="tab ${activeRibbonTab==='home'?'active':''}" data-tab="home">${t("tab_home")}</button>
       <button class="tab ${activeRibbonTab==='draw'?'active':''}" data-tab="draw">${t("tab_draw")}</button>
       <button class="tab ${activeRibbonTab==='annotate'?'active':''}" data-tab="annotate">${t("tab_annotate")}</button>
       <button class="tab ${activeRibbonTab==='view'?'active':''}" data-tab="view">${t("tab_view")}</button>
       <button class="tab ${activeRibbonTab==='manage'?'active':''}" data-tab="manage">${t("tab_manage")}</button>
       <button class="tab ${activeRibbonTab==='output'?'active':''}" data-tab="output">${t("tab_output")}</button>
+      </div>
       <button class="ribbon-collapse-toggle" id="ribbonCollapseBtn" aria-label="${t("ribbon_display_aria").replace("{mode}", ribbonModeLabel())}" aria-expanded="${ribbonDisplayMode === "expanded"}" title="${t("ribbon_display_title").replace("{mode}", ribbonModeLabel())}">${ribbonModeIcon()}</button>
       <span class="space-label">${t("space_label")}</span>
     </nav>
-    <section class="ribbon" id="ribbonContainer"></section>
+    <div class="ribbon-frame" id="ribbonFrame">
+      <button type="button" class="ribbon-scroll" id="ribbonScrollPrevious" title="${t("ribbon_scroll_previous")}" aria-label="${t("ribbon_scroll_previous")}" aria-controls="ribbonContainer" hidden>‹</button>
+      <section class="ribbon" id="ribbonContainer" role="tabpanel" tabindex="-1"></section>
+      <button type="button" class="ribbon-scroll" id="ribbonScrollNext" title="${t("ribbon_scroll_next")}" aria-label="${t("ribbon_scroll_next")}" aria-controls="ribbonContainer" hidden>›</button>
+    </div>
     <div class="drawing-tab" id="documentTabs"></div>
     <main class="workspace">
       <aside class="quickbar">
@@ -541,7 +557,7 @@ function renderShell() {
           <div class="panel-heading">
             <span class="panel-grip">⠿</span>
             <span>${t("prop_heading")}</span>
-            <button class="panel-collapse" id="toggleProperties" title="${t("collapse_properties")}" aria-label="${t("collapse_properties")}" aria-expanded="${!paletteCollapsed.properties}">${paletteCollapsed.properties ? "›" : "⌄"}</button>
+            <button class="panel-collapse" id="toggleProperties" title="${t(paletteCollapsed.properties ? "expand_properties" : "collapse_properties")}" aria-label="${t(paletteCollapsed.properties ? "expand_properties" : "collapse_properties")}" aria-expanded="${!paletteCollapsed.properties}">${paletteCollapsed.properties ? "›" : "⌄"}</button>
             <button class="panel-close" id="hideProperties" title="${t("close_properties")}" aria-label="${t("close_properties")}">×</button>
           </div>
           <div class="panel-body" id="propertiesBody"></div>
@@ -551,7 +567,7 @@ function renderShell() {
           <div class="panel-heading">
             <span class="panel-grip">⠿</span>
             <span>${t("layer_heading")}</span>
-            <button class="panel-collapse" id="toggleLayers" title="${t("collapse_layers")}" aria-label="${t("collapse_layers")}" aria-expanded="${!paletteCollapsed.layers}">${paletteCollapsed.layers ? "›" : "⌄"}</button>
+            <button class="panel-collapse" id="toggleLayers" title="${t(paletteCollapsed.layers ? "expand_layers" : "collapse_layers")}" aria-label="${t(paletteCollapsed.layers ? "expand_layers" : "collapse_layers")}" aria-expanded="${!paletteCollapsed.layers}">${paletteCollapsed.layers ? "›" : "⌄"}</button>
             <button class="add-layer" id="addLayerBtn" title="${t('add_layer')}">＋</button>
             <button class="panel-close" id="hideLayers" title="${t("close_layers")}" aria-label="${t("close_layers")}">×</button>
           </div>
@@ -633,8 +649,14 @@ function renderShell() {
 }
 
 function setRibbonDisplayMode(mode) {
+  if (!["expanded", "panels", "tabs"].includes(mode)) return;
+  ribbonFlyouts?.close();
   ribbonDisplayMode = mode;
-  localStorage.setItem("concostcad_ribbon_display_mode", ribbonDisplayMode);
+  try {
+    localStorage.setItem("concostcad_ribbon_display_mode", ribbonDisplayMode);
+  } catch (_) {
+    // The chosen display mode still applies when preference storage is unavailable.
+  }
   applyRibbonDisplayMode();
 }
 
@@ -650,25 +672,33 @@ function applyRibbonDisplayMode() {
     button.setAttribute("aria-label", tf("ribbon_display_aria", { mode: ribbonModeLabel() }));
     button.title = tf("ribbon_display_title", { mode: ribbonModeLabel() });
   }
-  $$("#ribbonContainer .group-caption").forEach((caption) => {
-    if (ribbonDisplayMode === "panels") {
-      caption.setAttribute("role", "button");
-      caption.tabIndex = 0;
-      caption.title = t("ribbon_expand_title");
-      caption.onclick = () => setRibbonDisplayMode("expanded");
-      caption.onkeydown = (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          setRibbonDisplayMode("expanded");
-        }
-      };
-    } else {
-      caption.removeAttribute("role");
-      caption.removeAttribute("tabindex");
-      caption.removeAttribute("title");
-      caption.onclick = null;
-      caption.onkeydown = null;
-    }
+  ribbonFlyouts?.update();
+  ribbonOverflow?.update();
+}
+
+function activateRibbonTab(tab, { toggle = false, focusPanel = false } = {}) {
+  if (ribbonDisplayMode === "tabs" && tab === activeRibbonTab && toggle && ribbonFlyouts?.isTabOpen()) {
+    ribbonFlyouts.close();
+    return;
+  }
+  if (ribbonDisplayMode === "panels") ribbonFlyouts?.close();
+  activeRibbonTab = tab;
+  renderRibbon();
+  $("#ribbonContainer").scrollLeft = 0;
+  if (ribbonDisplayMode === "tabs") ribbonFlyouts?.openTab({ focus: focusPanel });
+  else if (focusPanel) ribbonFlyouts?.focusPanel();
+  ribbonOverflow?.update();
+}
+
+function syncRibbonState() {
+  syncRibbonControls($("#ribbonContainer"), {
+    editorActive: !showStartScreen,
+    activeTool,
+    pointCount: points.length,
+    selectionCount: selectedHandles.size,
+    showGrid, snapEnabled, orthoEnabled, dynamicInputEnabled, commandbarVisible,
+    propertiesVisible: paletteVisibility.properties,
+    layersVisible: paletteVisibility.layers,
   });
 }
 
@@ -735,17 +765,22 @@ function bindShellEvents() {
     updateThemeControl();
   };
 
-  $$("#ribbonTabs .tab").forEach((tab) => {
-    tab.onclick = () => {
-      if (ribbonDisplayMode !== "expanded") setRibbonDisplayMode("expanded");
-      $$("#ribbonTabs .tab").forEach((t) => t.classList.remove("active"));
-      tab.classList.add("active");
-      activeRibbonTab = tab.dataset.tab;
-      renderRibbon();
-    };
-    tab.ondblclick = () => {
+  ribbonTabsBinding = bindRibbonTabs({
+    tabList: $("#ribbonTabs"),
+    onActivate: activateRibbonTab,
+    onToggleDisplay: () => {
       setRibbonDisplayMode(ribbonDisplayMode === "expanded" ? "tabs" : "expanded");
-    };
+    },
+  });
+  ribbonOverflow = mountRibbonOverflow({
+    frame: $("#ribbonFrame"), viewport: $("#ribbonContainer"),
+    previous: $("#ribbonScrollPrevious"), next: $("#ribbonScrollNext"),
+  });
+  ribbonFlyouts = mountRibbonFlyouts({
+    app: $("#app"), tabList: $("#ribbonTabs"), frame: $("#ribbonFrame"), viewport: $("#ribbonContainer"),
+    getMode: () => ribbonDisplayMode,
+    getActiveTab: () => activeRibbonTab,
+    panelTitle: (panel) => tf("ribbon_open_panel_title", { panel }),
   });
   $("#ribbonCollapseBtn").onclick = () => {
     const nextMode = ribbonDisplayMode === "expanded" ? "panels" : ribbonDisplayMode === "panels" ? "tabs" : "expanded";
@@ -998,8 +1033,7 @@ function bindShellEvents() {
 
   $("#confirmAddLayer").onclick = async () => {
     const name = $("#newLayerInput").value.trim();
-    if (name) {
-      await sync(invoke("add_layer", { name }));
+    if (name && await sync(invoke("add_layer", { name }))) {
       $("#newLayerInput").value = "";
       $("#newLayerContainer").style.display = "none";
       isAddingLayer = false;
@@ -1075,11 +1109,12 @@ function refreshPalette(name) {
   panel.classList.toggle("collapsed", paletteCollapsed[name]);
   const toggle = $(`#toggle${name === "properties" ? "Properties" : "Layers"}`);
   if (toggle) {
-    const label = name === "properties" ? "Properties" : "Layers";
-    const action = paletteCollapsed[name] ? "Expand" : "Collapse";
+    const label = t(name === "properties"
+      ? (paletteCollapsed[name] ? "expand_properties" : "collapse_properties")
+      : (paletteCollapsed[name] ? "expand_layers" : "collapse_layers"));
     toggle.textContent = paletteCollapsed[name] ? "›" : "⌄";
-    toggle.title = `${action} ${label}`;
-    toggle.setAttribute("aria-label", `${action} ${label}`);
+    toggle.title = label;
+    toggle.setAttribute("aria-label", label);
     toggle.setAttribute("aria-expanded", String(!paletteCollapsed[name]));
   }
   const sidepanels = $(".sidepanels");
@@ -1101,6 +1136,19 @@ function setPaletteVisibility(name, visible) {
   persistPalettePreferences();
   refreshPalette(name);
   renderRibbon();
+}
+
+function openNewLayerEditor() {
+  if (showStartScreen) return;
+  ribbonFlyouts?.close();
+  paletteVisibility.layers = true;
+  paletteCollapsed.layers = false;
+  persistPalettePreferences();
+  refreshPalette("layers");
+  syncRibbonState();
+  isAddingLayer = true;
+  $("#newLayerContainer").style.display = "flex";
+  $("#newLayerInput").focus({ preventScroll: true });
 }
 
 function bindPaletteSplitter() {
@@ -1427,6 +1475,7 @@ const setStatus = (s) => {
   const el = $("#status");
   if (el) el.textContent = s;
   updateDynamicInput();
+  syncRibbonState();
 };
 
 function setCommandbarVisible(visible) {
@@ -1452,6 +1501,7 @@ function setCommandbarVisible(visible) {
   } else if (commandbarVisible && !showStartScreen) {
     $("#commandInput")?.focus({ preventScroll: true });
   }
+  syncRibbonState();
 }
 
 function toggleDynamicInput() {
@@ -1475,6 +1525,7 @@ function toggleDynamicInput() {
     $("#viewport")?.focus({ preventScroll: true });
   }
   updateDynamicInput();
+  syncRibbonState();
 }
 
 function logCommand(text, kind = "prompt", command = null) {
@@ -2538,6 +2589,11 @@ function exportDrawingImage() {
 function renderRibbon() {
   const container = $("#ribbonContainer");
   if (!container) return;
+  const previousScrollLeft = container.scrollLeft;
+  const focusedControl = container.contains(document.activeElement) ? document.activeElement : null;
+  const focusedId = focusedControl?.id;
+  const focusedTool = focusedControl?.dataset.tool;
+  const previousFlyout = ribbonFlyouts?.beforeRender();
 
   if (activeRibbonTab === "home") {
     container.innerHTML = `
@@ -2564,7 +2620,7 @@ function renderRibbon() {
           <button class="tool-button ribbon-home-modify ${activeTool==='mirror'?'selected':''}" data-tool="mirror" title="${t("tool_mirror")} (MIRROR)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_mirror")}</span></button>
           <button class="tool-button ribbon-home-modify ${activeTool==='trim'?'selected':''}" data-tool="trim" title="${t("tool_trim")} (TRIM)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_trim")}</span></button>
           <button class="tool-button ribbon-home-modify ${activeTool==='extend'?'selected':''}" data-tool="extend" title="${t("tool_extend")} (EXTEND)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_extend")}</span></button>
-          <button class="tool-button ribbon-home-modify" id="offsetBtn" title="${t("tool_offset")} (OFFSET)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_offset")}</span></button>
+          <button class="tool-button ribbon-home-modify" id="offsetBtn" data-tool="offset" title="${t("tool_offset")} (OFFSET)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_offset")}</span></button>
           <button class="tool-button ribbon-home-modify" id="eraseBtn" title="${t("tool_erase")} (ERASE)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_erase")}</span></button>
           <button class="tool-button ribbon-home-modify ${activeTool==='fillet'?'selected':''}" data-tool="fillet" title="${t("tool_fillet")} (FILLET)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_fillet")}</span></button>
           <button class="tool-button ribbon-home-modify ${activeTool==='chamfer'?'selected':''}" data-tool="chamfer" title="${t("tool_chamfer")} (CHAMFER)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_chamfer")}</span></button>
@@ -2634,8 +2690,8 @@ function renderRibbon() {
       </div>
       <div class="ribbon-group">
         <div class="tools">
-          <button class="tool-button compact" id="finishPolylineBtn"><span class="tool-icon">✔</span><span>${t("label_finish_polyline")}</span></button>
-          <button class="tool-button compact" id="closePolylineBtn"><span class="tool-icon">⟲</span><span>${t("label_close_polyline")}</span></button>
+          <button class="tool-button compact" id="finishPolylineBtn" title="${t("ribbon_finish_polyline_title")}"><span class="tool-icon">✔</span><span>${t("label_finish_polyline")}</span></button>
+          <button class="tool-button compact" id="closePolylineBtn" title="${t("ribbon_close_polyline_title")}"><span class="tool-icon">⟲</span><span>${t("label_close_polyline")}</span></button>
         </div>
         <div class="group-caption">${t("grp_polyline_modes")}</div>
       </div>
@@ -2664,6 +2720,7 @@ function renderRibbon() {
     container.innerHTML = `
       <div class="ribbon-group">
         <div class="tools">
+          <button class="tool-button ${activeTool==='text'?'selected':''}" data-tool="text" title="${t("tool_text")} (TEXT)"><span class="tool-icon"></span><span>${t("tool_text")}</span></button>
           <button class="tool-button ${activeTool==='dim'?'selected':''}" data-tool="dim"><span class="tool-icon">📐</span><span>${t("tool_dim")}</span></button>
           <button class="tool-button ${activeTool==='dist'?'selected':''}" data-tool="dist"><span class="tool-icon">📏</span><span>${t("tool_dist")}</span></button>
           <button class="tool-button ${activeTool==='area'?'selected':''}" data-tool="area"><span class="tool-icon">⏢</span><span>${t("tool_area")}</span></button>
@@ -2691,9 +2748,9 @@ function renderRibbon() {
       </div>
       <div class="ribbon-group">
         <div class="tools">
-          <button class="tool-button compact ${showGrid?'selected':''}" id="ribbonToggleGrid"><span class="tool-icon">▦</span><span>${t("grid_btn")}</span></button>
-          <button class="tool-button compact ${snapEnabled?'selected':''}" id="ribbonToggleSnap"><span class="tool-icon">⊕</span><span>${t("snap_btn")}</span></button>
-          <button class="tool-button compact ${orthoEnabled?'selected':''}" id="ribbonToggleOrtho"><span class="tool-icon">∟</span><span>${t("ortho_btn")}</span></button>
+          <button class="tool-button compact ${showGrid?'selected':''}" id="ribbonToggleGrid" title="${t("toggle_grid_title")}"><span class="tool-icon">▦</span><span>${t("grid_btn")}</span></button>
+          <button class="tool-button compact ${snapEnabled?'selected':''}" id="ribbonToggleSnap" title="${t("toggle_snap_title")}"><span class="tool-icon">⊕</span><span>${t("snap_btn")}</span></button>
+          <button class="tool-button compact ${orthoEnabled?'selected':''}" id="ribbonToggleOrtho" title="${t("toggle_ortho_title")}"><span class="tool-icon">∟</span><span>${t("ortho_btn")}</span></button>
         </div>
         <div class="group-caption">${t("grp_aids")}</div>
       </div>
@@ -2753,15 +2810,21 @@ function renderRibbon() {
     `;
   }
 
-  if (showStartScreen) {
-    container.querySelectorAll("button, select, input").forEach((control) => {
-      if (control.id !== "ribbonOpen") control.disabled = true;
-    });
-  }
+  syncRibbonState();
+  syncRibbonTabs($("#ribbonTabs"), container, activeRibbonTab);
 
   applyToolbarIcons();
   bindRibbonEvents();
   applyRibbonDisplayMode();
+  ribbonFlyouts?.restore(previousFlyout);
+  container.scrollLeft = previousScrollLeft;
+  const restoredControl = focusedId
+    ? document.getElementById(focusedId)
+    : (focusedTool ? container.querySelector(`[data-tool="${focusedTool}"]`) : null);
+  if (restoredControl && container.contains(restoredControl) && !restoredControl.disabled) {
+    restoredControl.focus({ preventScroll: true });
+  }
+  ribbonOverflow?.update();
   const startNew = $("#ribbonStartNew");
   if (startNew) startNew.onclick = () => $("#newBtn").click();
   const startOpen = $("#ribbonStartOpen");
@@ -2813,10 +2876,7 @@ function bindRibbonEvents() {
 
   const ribbonAddLayer = $("#ribbonAddLayer");
   if (ribbonAddLayer) {
-    ribbonAddLayer.onclick = () => {
-      $("#newLayerContainer").style.display = "flex";
-      $("#newLayerInput").focus();
-    };
+    ribbonAddLayer.onclick = openNewLayerEditor;
   }
 
   const finishPolylineBtn = $("#finishPolylineBtn");
@@ -2901,6 +2961,7 @@ async function sync(promise) {
 }
 
 function chooseTool(tool) {
+  ribbonFlyouts?.close();
   if (tool !== "select") lastTool = tool;
   activeTool = tool;
   if (tool === "select" && $("#dynamicInput")?.contains(document.activeElement)) {
@@ -2908,6 +2969,8 @@ function chooseTool(tool) {
   }
   points = [];
   moveBasePoint = null;
+
+  offsetTargetHandle = null;
 
   $$("[data-tool]").forEach((b) => b.classList.toggle("selected", b.dataset.tool === tool));
 
@@ -3011,6 +3074,7 @@ function render() {
 }
 
 function renderProperties() {
+  syncRibbonState();
   const body = $("#propertiesBody");
   if (!body) return;
   const count = selectedHandles.size;
@@ -3364,6 +3428,7 @@ async function finishRevcloud() {
 }
 
 async function finishPolyline(closed = false) {
+  if (activeTool !== "polyline") return false;
   if (points.length < 2) {
     points = [];
     chooseTool("select");
@@ -3428,6 +3493,7 @@ function toggleGrid() {
     b.classList.toggle("active", showGrid);
     b.setAttribute("aria-pressed", String(showGrid));
   }
+  syncRibbonState();
   draw();
 }
 
@@ -3438,6 +3504,7 @@ function toggleSnap() {
     b.classList.toggle("active", snapEnabled);
     b.setAttribute("aria-pressed", String(snapEnabled));
   }
+  syncRibbonState();
   draw();
 }
 
@@ -3448,6 +3515,7 @@ function toggleOrtho() {
     b.classList.toggle("active", orthoEnabled);
     b.setAttribute("aria-pressed", String(orthoEnabled));
   }
+  syncRibbonState();
   draw();
 }
 

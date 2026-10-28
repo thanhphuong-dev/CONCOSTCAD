@@ -433,6 +433,20 @@ button {
   box-shadow: inset 0 -2px 0 #36a9e1;
 }
 
+.ribbon-tab-list {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ribbon-tab-list .tab { flex: none; }
+
+.tab:focus-visible {
+  outline: 1px solid var(--accent-glow);
+  outline-offset: -3px;
+}
+
 .space-label {
   margin-left: 8px;
   margin-right: 18px;
@@ -464,9 +478,34 @@ button {
 }
 
 /* Ribbon */
-.ribbon {
+.ribbon-frame {
   height: 100px;
   flex: none;
+  min-width: 0;
+  display: flex;
+  background: var(--cad-chrome-ribbon);
+}
+
+.ribbon-scroll {
+  flex: 0 0 22px;
+  padding: 0;
+  border: 1px solid var(--cad-chrome-edge);
+  color: inherit;
+  font-size: 24px;
+}
+
+.ribbon-scroll[hidden] { display: none; }
+.ribbon-scroll:disabled { opacity: .3; cursor: default; }
+.ribbon-scroll:not(:disabled):hover { background: var(--cad-chrome-hover); }
+.ribbon-scroll:focus-visible { outline: 1px solid var(--accent-glow); outline-offset: -3px; }
+
+#app.ribbon-mode-tabs .ribbon-frame { display: none; }
+#app.ribbon-mode-panels .ribbon-frame { height: 30px; }
+
+.ribbon {
+  height: 100%;
+  min-width: 0;
+  flex: 1;
   background: var(--cad-chrome-ribbon);
   border-bottom: 1px solid #222e3d;
   display: flex;
@@ -482,12 +521,45 @@ button {
   display: none;
 }
 
+#app.ribbon-mode-tabs.ribbon-flyout-open .ribbon-frame {
+  display: flex;
+  position: fixed;
+  z-index: 130;
+  height: 100px;
+  box-shadow: 0 5px 12px #0005;
+}
+
+#app.ribbon-mode-tabs.ribbon-flyout-open .ribbon {
+  display: flex;
+}
+
+.ribbon-panel-popover {
+  position: fixed;
+  z-index: 130;
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--cad-chrome-edge);
+  border-radius: 3px;
+  background: var(--cad-chrome-ribbon);
+  box-shadow: 0 5px 12px #0005;
+}
+
+.ribbon-panel-popover > .tools {
+  min-height: 52px;
+}
+
 #app.ribbon-mode-panels .ribbon {
   height: 30px;
   padding: 0 6px;
   align-items: stretch;
-  overflow: hidden;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+
+#app.ribbon-mode-panels .ribbon::-webkit-scrollbar { height: 0; }
 
 #app.ribbon-mode-panels .ribbon-group {
   flex: 0 0 auto;
@@ -518,9 +590,10 @@ button {
 
 #app.ribbon-mode-panels .ribbon-group .group-caption:hover,
 #app.ribbon-mode-panels .ribbon-group .group-caption:focus-visible {
-  color: #fff;
+  color: inherit;
   background: var(--cad-chrome-hover);
-  outline: none;
+  outline: 1px solid var(--accent-glow);
+  outline-offset: -2px;
 }
 
 .ribbon::-webkit-scrollbar {
@@ -2880,11 +2953,6 @@ body.resizing-commandbar * {
     padding-right: 3px;
     padding-left: 3px;
     gap: 0;
-    overflow-x: hidden;
-  }
-
-  .ribbon::-webkit-scrollbar {
-    display: none;
   }
 
   .ribbon-group {

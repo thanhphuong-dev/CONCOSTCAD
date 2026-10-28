@@ -16,6 +16,7 @@ Chào mừng bạn đến với **CONCOSTCAD** – Phần mềm đồ họa kỹ
 - **Bảng thuộc tính trực tiếp (Live Properties Panel):** Cho phép xem và chỉnh sửa ngay lập tức tọa độ, kích thước, bán kính, góc xoay, lớp (layer) của đối tượng đang chọn.
 - **Bảng quản lý lớp (Layers Panel):** Thêm layer, kích hoạt layer hiện hành, bật/tắt hiển thị, khóa chỉnh sửa, và chọn màu hiển thị (BYLAYER).
 - **Thanh dòng lệnh (Command Bar):** Nhập lệnh CAD, tọa độ tuyệt đối (`x,y`), tương đối (`@dx,dy`) hoặc cực (`@khoảng_cách<góc`); hỗ trợ số có dấu và dạng thập phân `.5`, `1.`. Dynamic Input và dòng lệnh dùng cùng parser.
+- **Điều khiển Ribbon:** Khi tab Ribbon có focus, dùng ←/→ để chuyển tab, Home/End về tab đầu/cuối và ↓ để vào vùng lệnh. Ở chế độ chỉ hiện tab, nhấp tab để mở tạm Ribbon; ở chế độ chỉ hiện tên panel, nhấp tên nhóm để mở riêng các lệnh của nhóm đó. Escape đóng bảng lệnh tạm và trả focus về nơi đã mở; nhấp hoặc chuyển focus ra ngoài cũng đóng bảng. Các thao tác mở tạm giữ nguyên chế độ thu gọn đã lưu. Nếu các nhóm lệnh rộng hơn cửa sổ, dùng nút ‹/› ở hai mép để cuộn; Tab tới một lệnh cũng đưa lệnh đó vào vùng hiển thị. Finish/Close PLINE chỉ bật khi đang vẽ PLINE và đã có ít nhất 2 đỉnh. Add Layer trên Ribbon tự mở rộng bảng Lớp và đặt focus vào ô tên lớp.
 - **Thanh trạng thái (Status Bar):** Tọa độ con trỏ thời gian thực, nút chuyển đổi Lưới (Grid), Bắt điểm (Osnap - F3), Chế độ góc vuông (Ortho - F8), Tỷ lệ thu phóng (Zoom %).
 
 ---
