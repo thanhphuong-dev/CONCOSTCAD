@@ -1,6 +1,8 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { bindViewCube, normalizeRotation, rotationAroundCenter, updateViewCube } from "./view-cube.js";
+import { cadShortcut, mountShellEvents } from "./shell-events.js";
 import "./style.css";
 
 const $ = (s) => document.querySelector(s);
@@ -94,7 +96,9 @@ function applyToolbarIcons() {
 }
 
 // Localization Catalogs (Tuần 23: Localization/Settings)
-let currentLang = localStorage.getItem("concostcad_lang") || "vi";
+const supportedLanguages = ["en", "vi", "ko"];
+const savedLanguage = localStorage.getItem("concostcad_lang");
+let currentLang = supportedLanguages.includes(savedLanguage) ? savedLanguage : "en";
 
 const i18n = {
   vi: {
@@ -250,10 +254,23 @@ const i18n = {
     grid_btn: "▦ GRID",
     snap_btn: "⊕ SNAP",
     ortho_btn: "∟ ORTHO",
-  }
+  },
+  // Korean is an intentional skeleton locale; missing strings fall back to English.
+  ko: {}
 };
 
 const t = (key) => i18n[currentLang]?.[key] ?? i18n.en[key] ?? key;
+
+function languageControlLabel() {
+  if (currentLang === "vi") return "Đổi ngôn ngữ";
+  if (currentLang === "ko") return "언어 변경";
+  return "Change language";
+}
+
+function cycleLanguage(language) {
+  const currentIndex = supportedLanguages.indexOf(language);
+  return supportedLanguages[(currentIndex + 1 + supportedLanguages.length) % supportedLanguages.length];
+}
 
 function readQuickAccessVisibility() {
   try {
@@ -367,6 +384,7 @@ let commandbarHeight = Number.isFinite(savedCommandbarHeight) && savedCommandbar
   : 72;
 let closeGuardBound = false;
 let menuDismissBound = false;
+let shellEvents = null;
 let appWindowRef = null;
 let windowCloseAllowed = false;
 let closeConfirmationPending = false;
@@ -408,6 +426,8 @@ const app = $("#app");
 
 // Render Base Shell
 function renderShell() {
+  shellEvents?.dispose();
+  document.body.classList.remove("resizing-palette", "resizing-palette-width", "resizing-commandbar");
   const recent = getRecentDrawings();
   const shellTitle = showStartScreen
     ? "CONCOSTCAD"
@@ -462,7 +482,7 @@ function renderShell() {
       </div>
       <div class="title-name" id="titleName" data-tauri-drag-region>${escapeHtml(shellTitle)}</div>
       <div class="title-spacer" data-tauri-drag-region></div>
-      <button class="title-action" id="langToggleBtn" style="height:22px; padding:0 8px; font-weight:700; color:#8fe2f3; background:#1b3846;" title="Toggle Language (VI / EN)">${currentLang.toUpperCase()}</button>
+      <button class="title-action" id="langToggleBtn" style="height:22px; padding:0 8px; font-weight:700; color:#8fe2f3; background:#1b3846;" title="${languageControlLabel()}" aria-label="${languageControlLabel()}">${currentLang.toUpperCase()}</button>
       <div class="edition" data-tauri-drag-region>${t("brand_sub")}</div>
       <div class="window-controls">
         <button aria-label="Minimize" id="minimizeBtn">−</button>
@@ -561,7 +581,7 @@ function renderShell() {
             <i class="crosshair-pickbox"></i>
           </div>
           <div class="ucs-indicator" id="canvasCoords" title="World Coordinate System" aria-label="World Coordinate System">
-            <svg viewBox="0 0 40 38" aria-hidden="true">
+            <svg viewBox="-32 -11 80 80" aria-hidden="true">
               <path class="ucs-axis-x" d="M8 29H34M29 24l5 5-5 5" />
               <path class="ucs-axis-y" d="M8 29V4M3 9l5-5 5 5" />
               <circle cx="8" cy="29" r="2" />
@@ -570,13 +590,17 @@ function renderShell() {
             </svg>
             <span id="canvasSpaceLabel">WCS</span>
           </div>
-          <div class="view-cube" id="viewCube" aria-label="ViewCube">
+          <div class="view-cube" id="viewCube" role="group" aria-label="ViewCube · 2D WCS">
+            <button class="cube-home cube-action" title="${currentLang === 'vi' ? 'Home · Hướng Bắc và thu phóng toàn bộ' : 'Home · North up and Zoom Extents'}" aria-label="${currentLang === 'vi' ? 'Hướng Bắc và thu phóng toàn bộ' : 'North up and Zoom Extents'}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-8 9 8M6 9v12h12V9M10 21v-7h4v7"/></svg></button>
             <span class="cube-compass-ring" aria-hidden="true"></span>
             <button class="cube-direction cube-north" data-cube-heading="N" aria-pressed="true" title="North up">N</button>
             <button class="cube-direction cube-east" data-cube-heading="E" title="East up">E</button>
             <button class="cube-direction cube-south" data-cube-heading="S" title="South up">S</button>
             <button class="cube-direction cube-west" data-cube-heading="W" title="West up">W</button>
-            <button class="cube-top-face" id="cubeTopButton" title="Top view · North up" aria-label="Top view · North up">TOP</button>
+            <button class="cube-top-face" id="cubeTopButton" title="${currentLang === 'vi' ? 'Nhấp: hướng Bắc · Kéo ngang: xoay · ←/→: 15° · Shift: 45°' : 'Click: North up · Drag horizontally: rotate · ←/→: 15° · Shift: 45°'}" aria-label="${currentLang === 'vi' ? 'Góc nhìn TOP · Kéo hoặc dùng phím mũi tên để xoay' : 'TOP view · Drag or use arrow keys to rotate'}">TOP</button>
+            <button class="cube-action cube-turn-left" data-cube-turn="1" title="${currentLang === 'vi' ? 'Xoay trái 90°' : 'Rotate left 90°'}" aria-label="${currentLang === 'vi' ? 'Xoay trái 90°' : 'Rotate left 90°'}">↶</button>
+            <output class="cube-angle" aria-label="${currentLang === 'vi' ? 'Góc xoay vùng nhìn' : 'View rotation'}" aria-live="off">0°</output>
+            <button class="cube-action cube-turn-right" data-cube-turn="-1" title="${currentLang === 'vi' ? 'Xoay phải 90°' : 'Rotate right 90°'}" aria-label="${currentLang === 'vi' ? 'Xoay phải 90°' : 'Rotate right 90°'}">↷</button>
           </div>
           <div class="nav-wheel" role="toolbar" aria-label="View navigation">
             <button class="nav-control" id="navZoomExtents" title="Zoom Extents" aria-label="Zoom Extents"><span class="tool-icon"></span></button>
@@ -584,10 +608,8 @@ function renderShell() {
             <button class="nav-control" id="navZoomOut" title="Zoom Out" aria-label="Zoom Out"><span class="tool-icon"></span></button>
           </div>
         </div>
-        <div class="layout-tab-bar" id="layoutTabBar">
-          <button class="layout-tab active" data-space="model">Model</button>
-          <button class="layout-tab" data-space="layout1">Layout1</button>
-          <button class="layout-tab" data-space="layout2">Layout2</button>
+        <div class="layout-tab-bar" id="layoutTabBar" role="tablist" aria-label="${currentLang === "vi" ? "Không gian bản vẽ" : "Drawing spaces"}">
+          ${getDrawingSpaces(activeDocId).map((space) => `<button class="layout-tab" role="tab" aria-selected="${space === activeSpace}" data-space="${space}">${space === "model" ? "Model" : `Layout${space.slice(6)}`}</button>`).join("")}
           <button class="layout-add-btn" id="addLayoutBtn" title="Thêm bố cục mới">＋</button>
         </div>
       </section>
@@ -684,6 +706,7 @@ function renderShell() {
   renderCommandLog();
   applyToolbarIcons();
   bindShellEvents();
+  shellEvents = mountShellEvents({ viewport: $("#viewport"), onResize: resize, onKeyDown: handleGlobalKeyDown });
 }
 
 function setRibbonDisplayMode(mode) {
@@ -745,7 +768,7 @@ function bindShellEvents() {
   });
 
   $("#langToggleBtn").onclick = () => {
-    currentLang = currentLang === "vi" ? "en" : "vi";
+    currentLang = cycleLanguage(currentLang);
     localStorage.setItem("concostcad_lang", currentLang);
     renderShell();
     renderRibbon();
@@ -780,7 +803,7 @@ function bindShellEvents() {
     points = [];
     pan = { x: 0, y: 0 };
     zoom = 1;
-    selectedHandles.clear();
+    setViewRotation(0);
     setStatus(t("ready_status"));
   };
 
@@ -850,12 +873,7 @@ function bindShellEvents() {
     const button = document.getElementById(id);
     if (button) button.onclick = () => { closeMenus(); action(); };
   };
-  const cubeFace = $("#viewCube .cube-top-face");
-  cubeFace?.style.setProperty("transform", `rotate(${-viewRotation}rad)`);
-  const cubeHeading = ({ 0: "N", [Math.PI / 2]: "E", [Math.PI]: "S", [-Math.PI / 2]: "W" })[viewRotation];
-  $$("[data-cube-heading]").forEach((button) => {
-    button.setAttribute("aria-pressed", String(button.dataset.cubeHeading === cubeHeading));
-  });
+  syncViewNavigation();
   menuAction("menuNewDrawing", () => $("#newBtn").click());
   menuAction("menuOpenDrawing", openDrawing);
   menuAction("menuSaveDrawing", saveDrawing);
@@ -884,11 +902,7 @@ function bindShellEvents() {
       closeMenus();
       const id = Number(button.dataset.menuWindowDoc);
       if (showStartScreen) enterEditor();
-      if (id !== activeDocId && await sync(invoke("switch_drawing", { id }))) {
-        selectedHandles.clear();
-        points = [];
-        chooseTool("select");
-      }
+      if (id !== activeDocId) await sync(invoke("switch_drawing", { id }));
     };
   });
   $$(".recent-open").forEach((button) => {
@@ -917,10 +931,38 @@ function bindShellEvents() {
   $("#navZoomExtents").onclick = zoomToExtents;
   $("#navZoomIn").onclick = () => { zoom *= 1.25; draw(); };
   $("#navZoomOut").onclick = () => { zoom /= 1.25; draw(); };
-  $$("[data-cube-heading]").forEach((button) => {
-    button.onclick = () => setViewHeading(button.dataset.cubeHeading);
+  const navControls = $(".nav-wheel");
+  for (const name of ["pointerdown", "pointermove", "pointerup", "dblclick", "contextmenu", "wheel"]) {
+    navControls.addEventListener(name, (event) => {
+      event.stopPropagation();
+      if (name === "wheel" || name === "contextmenu") event.preventDefault();
+    }, { passive: false });
+  }
+  navControls.addEventListener("pointerenter", () => {
+    crosshairEl.hidden = true;
+    viewportEl.classList.remove("crosshair-active");
+    currentSnap = null;
+    draw();
   });
-  $("#cubeTopButton").onclick = () => setViewHeading("N");
+  bindViewCube($("#viewCube"), {
+    getRotation: () => viewRotation,
+    setRotation: setViewRotation,
+    home: () => {
+      setViewRotation(0);
+      const visible = model.entities.some((entity) => {
+        const layer = model.layers.find((item) => item.name === entity.layer);
+        return !layer || (!layer.off && !layer.frozen);
+      });
+      if (visible) zoomToExtents();
+      else { zoom = 1; pan = { x: 0, y: 0 }; draw(); }
+    },
+    onEnter: () => {
+      crosshairEl.hidden = true;
+      viewportEl.classList.remove("crosshair-active");
+      currentSnap = null;
+      draw();
+    },
+  });
   $("#toggleProperties").onclick = () => togglePaletteCollapsed("properties");
   $("#toggleLayers").onclick = () => togglePaletteCollapsed("layers");
   $("#hideProperties").onclick = () => setPaletteVisibility("properties", false);
@@ -999,49 +1041,45 @@ function bindShellEvents() {
   };
 
   $("#newLayerInput").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") $("#confirmAddLayer").click();
-        if ((e.key === " " || e.code === "Space") && activeTool === "select" && document.activeElement !== $("#commandInput") && document.activeElement !== $("#newLayerInput") && !document.activeElement.classList.contains("prop-input")) {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === "Enter") {
       e.preventDefault();
-      chooseTool(lastTool);
-      return;
+      e.stopPropagation();
+      if (!e.repeat) $("#confirmAddLayer").click();
     }
     if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
       $("#newLayerContainer").style.display = "none";
       isAddingLayer = false;
+      $("#viewport").focus({ preventScroll: true });
     }
   });
 
   bindCanvasEvents(viewportEl, canvasEl);
 
   $$(".layout-tab").forEach((btn) => {
-    btn.onclick = () => {
-      $$(".layout-tab").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      activeSpace = btn.dataset.space;
-      setStatus(activeSpace === "model" ? "Không gian mô hình (Model Space)" : `Không gian giấy (Paper Space - ${activeSpace.toUpperCase()})`);
-      draw();
-    };
+    btn.onclick = () => activateDrawingSpace(btn.dataset.space);
   });
   const addLayBtn = $("#addLayoutBtn");
   if (addLayBtn) {
     addLayBtn.onclick = () => {
       const bar = $("#layoutTabBar");
-      const num = bar.querySelectorAll(".layout-tab").length;
+      const spaces = getDrawingSpaces(activeDocId);
+      const num = spaces.reduce((max, space) => Math.max(max, Number(space.replace("layout", "")) || 0), 0) + 1;
       const newBtn = document.createElement("button");
       newBtn.className = "layout-tab";
+      newBtn.setAttribute("role", "tab");
+      newBtn.setAttribute("aria-selected", "false");
       newBtn.dataset.space = `layout${num}`;
       newBtn.textContent = `Layout${num}`;
-      newBtn.onclick = () => {
-        $$(".layout-tab").forEach((b) => b.classList.remove("active"));
-        newBtn.classList.add("active");
-        activeSpace = newBtn.dataset.space;
-        setStatus(`Không gian giấy (Paper Space - ${activeSpace.toUpperCase()})`);
-        draw();
-      };
+      spaces.push(newBtn.dataset.space);
+      newBtn.onclick = () => activateDrawingSpace(newBtn.dataset.space);
       bar.insertBefore(newBtn, addLayBtn);
       newBtn.click();
     };
   }
+  syncActiveLayoutTab();
   bindCommandBarEvents();
 }
 
@@ -1125,9 +1163,9 @@ function bindPaletteSplitter() {
       document.body.classList.remove("resizing-palette");
       applyHeight(propertiesPanelHeight, true);
     };
-    document.addEventListener("pointermove", move);
-    document.addEventListener("pointerup", finish, { once: true });
-    document.addEventListener("pointercancel", finish, { once: true });
+    document.addEventListener("pointermove", move, { signal: shellEvents.signal });
+    document.addEventListener("pointerup", finish, { once: true, signal: shellEvents.signal });
+    document.addEventListener("pointercancel", finish, { once: true, signal: shellEvents.signal });
   });
 
   splitter.addEventListener("keydown", (event) => {
@@ -1166,9 +1204,9 @@ function bindPaletteWidthSplitter() {
       document.body.classList.remove("resizing-palette-width");
       applyWidth(sidepanelsWidth, true);
     };
-    document.addEventListener("pointermove", move);
-    document.addEventListener("pointerup", finish, { once: true });
-    document.addEventListener("pointercancel", finish, { once: true });
+    document.addEventListener("pointermove", move, { signal: shellEvents.signal });
+    document.addEventListener("pointerup", finish, { once: true, signal: shellEvents.signal });
+    document.addEventListener("pointercancel", finish, { once: true, signal: shellEvents.signal });
   });
 
   splitter.addEventListener("keydown", (event) => {
@@ -1207,9 +1245,9 @@ function bindCommandbarSplitter() {
       document.body.classList.remove("resizing-commandbar");
       applyHeight(commandbarHeight, true);
     };
-    document.addEventListener("pointermove", move);
-    document.addEventListener("pointerup", finish, { once: true });
-    document.addEventListener("pointercancel", finish, { once: true });
+    document.addEventListener("pointermove", move, { signal: shellEvents.signal });
+    document.addEventListener("pointerup", finish, { once: true, signal: shellEvents.signal });
+    document.addEventListener("pointercancel", finish, { once: true, signal: shellEvents.signal });
   });
 
   splitter.addEventListener("keydown", (event) => {
@@ -1223,8 +1261,6 @@ function showStartTab() {
   showStartScreen = true;
   activeRibbonTab = "home";
   renderShell();
-  new ResizeObserver(resize).observe($("#viewport"));
-  resize();
   renderRibbon();
   render();
 }
@@ -1240,10 +1276,10 @@ async function closeDocumentTab(id) {
   }
   const closingLast = openDocuments.length === 1;
   if (!await sync(invoke("close_drawing", { id, discard: true }))) return false;
-  selectedHandles.clear();
-  points = [];
+  drawingViewStates.delete(id);
+  drawingLayoutSpaces.delete(id);
+  drawingSelections.delete(id);
   if (closingLast) showStartTab();
-  else chooseTool("select");
   setStatus(currentLang === "vi" ? "Đã đóng bản vẽ" : "Drawing closed");
   return true;
 }
@@ -1263,6 +1299,9 @@ function updateActiveDocumentTab() {
 
 let showGrid = true;
 let activeSpace = "model";
+const drawingViewStates = new Map();
+const drawingLayoutSpaces = new Map();
+const drawingSelections = new Map();
 let openDocuments = [
   { id: 1, title: "Drawing1", path: null, dirty: false }
 ];
@@ -1273,6 +1312,86 @@ let filletRadius = 0;
 let chamferDist = 5;
 let dimPrecision = 2;
 let dimSuffix = "";
+
+function captureActiveDrawingView() {
+  return { zoom, pan: { x: pan.x, y: pan.y }, viewRotation, activeSpace };
+}
+
+function activateDrawingSpace(space) {
+  activeSpace = space;
+  syncActiveLayoutTab();
+  setStatus(space === "model" ? "Không gian mô hình (Model Space)" : `Không gian giấy (Paper Space - ${space.toUpperCase()})`);
+  draw();
+}
+
+function getDrawingSpaces(documentId) {
+  let spaces = drawingLayoutSpaces.get(documentId);
+  if (!spaces) {
+    spaces = ["model", "layout1", "layout2"];
+    drawingLayoutSpaces.set(documentId, spaces);
+  }
+  return spaces;
+}
+
+function syncActiveLayoutTab() {
+  const bar = $("#layoutTabBar");
+  const allowedSpaces = getDrawingSpaces(activeDocId);
+  const addButton = $("#addLayoutBtn");
+  allowedSpaces.forEach((space) => {
+    if (bar?.querySelector(`[data-space="${space}"]`)) return;
+    const button = document.createElement("button");
+    button.className = "layout-tab";
+    button.dataset.space = space;
+    button.setAttribute("role", "tab");
+    button.textContent = space === "model" ? "Model" : `Layout${space.slice(6)}`;
+    button.onclick = () => activateDrawingSpace(space);
+    bar.insertBefore(button, addButton);
+  });
+  $$(".layout-tab").forEach((button) => {
+    const visible = allowedSpaces.includes(button.dataset.space);
+    button.hidden = !visible;
+    const active = visible && button.dataset.space === activeSpace;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+}
+
+function restoreDrawingView(documentId) {
+  const saved = drawingViewStates.get(documentId);
+  zoom = Number.isFinite(saved?.zoom) && saved.zoom > 0 ? saved.zoom : 1;
+  pan = Number.isFinite(saved?.pan?.x) && Number.isFinite(saved?.pan?.y)
+    ? { x: saved.pan.x, y: saved.pan.y }
+    : { x: 0, y: 0 };
+  viewRotation = Number.isFinite(saved?.viewRotation) ? saved.viewRotation : 0;
+  activeSpace = typeof saved?.activeSpace === "string" ? saved.activeSpace : "model";
+  currentSnap = null;
+  syncViewNavigation();
+  syncActiveLayoutTab();
+}
+
+function restoreDrawingSelection(documentId) {
+  const saved = drawingSelections.get(documentId) || new Set();
+  const availableHandles = new Set((model.entities || []).map((entity) => entity.handle));
+  selectedHandles = new Set(Array.from(saved).filter((handle) => availableHandles.has(handle)));
+  drawingSelections.set(documentId, new Set(selectedHandles));
+}
+
+function cancelInteractionForDrawingSwitch() {
+  activeTool = "select";
+  points = [];
+  moveBasePoint = null;
+  activeGrip = null;
+  offsetTargetHandle = null;
+  isBoxSelecting = false;
+  boxStart = null;
+  boxCurrent = null;
+  isPanning = false;
+  lastPan = null;
+  currentSnap = null;
+  const commandInput = $("#commandInput");
+  if (commandInput) commandInput.placeholder = t("cmd_placeholder");
+  setStatus(t("ready_status"));
+}
 
 // Catmull-Rom Spline Interpolation for smooth CAD curves
 function interpolateCatmullRom(pts, numSamples = 10) {
@@ -1379,25 +1498,27 @@ function screenToWorld(x, y) {
   };
 }
 
-function setViewHeading(heading) {
-  const angles = { N: 0, E: Math.PI / 2, S: Math.PI, W: -Math.PI / 2 };
-  const nextRotation = angles[heading];
-  if (nextRotation === undefined) return;
-  const canvas = $("#cadCanvas");
-  if (!canvas) return;
-  // Keep the world point under the viewport center fixed while rotating.
-  const target = screenToWorld(canvas.clientWidth / 2, canvas.clientHeight / 2);
-  viewRotation = nextRotation;
-  const cos = Math.cos(viewRotation), sin = Math.sin(viewRotation);
-  const viewX = target.x * cos - target.y * sin;
-  const viewY = target.x * sin + target.y * cos;
-  pan.x = -viewX * zoom;
-  pan.y = viewY * zoom;
-  const cube = $("#viewCube");
-  cube?.querySelector(".cube-top-face")?.style.setProperty("transform", `rotate(${-viewRotation}rad)`);
-  cube?.querySelectorAll("[data-cube-heading]").forEach((button) => {
-    button.setAttribute("aria-pressed", String(button.dataset.cubeHeading === heading));
+function syncViewNavigation() {
+  updateViewCube($("#viewCube"), viewRotation);
+  // Centering the UCS glyph leaves room for every orientation. Text stays upright.
+  const svg = $("#canvasCoords svg");
+  svg?.querySelectorAll("path, circle").forEach((element) => {
+    element.setAttribute("transform", `rotate(${-viewRotation * 180 / Math.PI} 8 29)`);
   });
+  svg?.querySelectorAll("text").forEach((element, index) => {
+    const a = viewRotation + (index === 0 ? 0 : Math.PI / 2);
+    element.setAttribute("x", String(8 + 32 * Math.cos(a)));
+    element.setAttribute("y", String(32 - 32 * Math.sin(a)));
+  });
+}
+
+function setViewRotation(angle) {
+  if (!Number.isFinite(angle)) return;
+  const nextRotation = normalizeRotation(angle);
+  pan = rotationAroundCenter(pan, viewRotation, nextRotation);
+  viewRotation = nextRotation;
+  currentSnap = null;
+  syncViewNavigation();
   draw();
 }
 
@@ -1540,7 +1661,9 @@ function getEntityBounds(e) {
 
 // Window & Crossing Selection Query
 function queryEntitiesInBox(p1, p2) {
-  const isWindow = p2.x >= p1.x; // Left-to-Right = Window, Right-to-Left = Crossing
+  p1 = worldToScreen(p1.x, p1.y);
+  p2 = worldToScreen(p2.x, p2.y);
+  const isWindow = p2.x >= p1.x; // Screen Left-to-Right = Window
   const boxMinX = Math.min(p1.x, p2.x);
   const boxMaxX = Math.max(p1.x, p2.x);
   const boxMinY = Math.min(p1.y, p2.y);
@@ -1552,7 +1675,13 @@ function queryEntitiesInBox(p1, p2) {
     const layerObj = model.layers.find((l) => l.name === e.layer);
     if (layerObj && (layerObj.off || layerObj.frozen)) continue;
 
-    const b = getEntityBounds(e);
+    const worldBounds = getEntityBounds(e);
+    const corners = [
+      worldToScreen(worldBounds.minX, worldBounds.minY), worldToScreen(worldBounds.minX, worldBounds.maxY),
+      worldToScreen(worldBounds.maxX, worldBounds.minY), worldToScreen(worldBounds.maxX, worldBounds.maxY),
+    ];
+    const b = { minX: Math.min(...corners.map((p) => p.x)), maxX: Math.max(...corners.map((p) => p.x)),
+      minY: Math.min(...corners.map((p) => p.y)), maxY: Math.max(...corners.map((p) => p.y)) };
 
     if (isWindow) {
       // Must be completely inside
@@ -2131,7 +2260,7 @@ function draw() {
     const bw = Math.abs(s2.x - s1.x);
     const bh = Math.abs(s2.y - s1.y);
 
-    const isWindow = boxCurrent.x >= boxStart.x;
+    const isWindow = s2.x >= s1.x;
     if (isWindow) {
       ctx.fillStyle = "rgba(23, 100, 200, 0.18)";
       ctx.fillRect(bx, by, bw, bh);
@@ -2659,6 +2788,9 @@ function escapeHtml(s) {
 }
 
 async function sync(promise) {
+  const previousDocumentId = activeDocId;
+  const previousView = captureActiveDrawingView();
+  const previousSelection = new Set(selectedHandles);
   try {
     model = await promise;
     if (Array.isArray(model.documents)) {
@@ -2668,7 +2800,20 @@ async function sync(promise) {
         path: drawing.title,
         dirty: drawing.dirty
       }));
-      activeDocId = model.documentId;
+      if (previousDocumentId !== model.documentId) {
+        if (previousDocumentId != null) {
+          drawingViewStates.set(previousDocumentId, previousView);
+          drawingSelections.set(previousDocumentId, previousSelection);
+        }
+        activeDocId = model.documentId;
+        restoreDrawingView(activeDocId);
+        restoreDrawingSelection(activeDocId);
+        cancelInteractionForDrawingSwitch();
+      } else {
+        activeDocId = model.documentId;
+        drawingViewStates.set(activeDocId, captureActiveDrawingView());
+        drawingSelections.set(activeDocId, new Set(selectedHandles));
+      }
     }
     render();
     return true;
@@ -3098,56 +3243,68 @@ function zoomToExtents() {
 async function finishSpline() {
   if (points.length < 2) {
     points = [];
+    chooseTool("select");
+    setStatus(currentLang === "vi" ? "Đã hủy SPLINE: cần ít nhất 2 điểm" : "SPLINE canceled: at least 2 points are required");
     draw();
-    return;
+    return false;
   }
   const splinePts = interpolateCatmullRom(points, 10);
-  await sync(
+  if (!await sync(
     invoke("add_polyline", {
       points: splinePts,
       closed: false
     })
-  );
+  )) return false;
   points = [];
   chooseTool("select");
   setStatus(currentLang === "vi" ? "Đã tạo đường cong Spline (SPLINE)" : "Spline curve created");
   draw();
+  return true;
 }
 
 async function finishRevcloud() {
   if (points.length < 2) {
     points = [];
+    chooseTool("select");
+    setStatus(currentLang === "vi" ? "Đã hủy REVCLOUD: cần ít nhất 2 điểm" : "REVCLOUD canceled: at least 2 points are required");
     draw();
-    return;
+    return false;
   }
   const cloudPts = generateRevisionCloud(points, 24);
-  await sync(
+  if (!await sync(
     invoke("add_polyline", {
       points: cloudPts,
       closed: true
     })
-  );
+  )) return false;
   points = [];
   chooseTool("select");
   setStatus(currentLang === "vi" ? "Đã tạo đám mây ghi chú (REVCLOUD)" : "Revision Cloud created");
   draw();
+  return true;
 }
 
 async function finishPolyline(closed = false) {
   if (points.length < 2) {
     points = [];
+    chooseTool("select");
+    setStatus(currentLang === "vi" ? "Đã hủy PLINE: cần ít nhất 2 đỉnh" : "PLINE canceled: at least 2 vertices are required");
     draw();
-    return;
+    return false;
   }
-  await sync(
+  if (!await sync(
     invoke("add_polyline", {
       points: points.map((p) => [p.x, p.y, p.bulge || 0]),
       closed
     })
-  );
+  )) return false;
   points = [];
-  setStatus(closed ? "Closed Polyline created" : "Polyline created");
+  chooseTool("select");
+  setStatus(currentLang === "vi"
+    ? (closed ? "Đã tạo PLINE khép kín" : "Đã tạo PLINE")
+    : (closed ? "Closed Polyline created" : "Polyline created"));
   draw();
+  return true;
 }
 
 function undoPolylineVertex() {
@@ -3161,7 +3318,9 @@ function undoPolylineVertex() {
 }
 
 async function acceptCurrentCommand() {
-  if (activeTool === "line" && points.length > 0) {
+  if (activeTool === "select") {
+    chooseTool(lastTool);
+  } else if (activeTool === "line" && points.length > 0) {
     points = [];
     chooseTool("select");
     setStatus("LINE finished");
@@ -3214,6 +3373,7 @@ function toggleOrtho() {
 // Canvas Event Bindings
 function bindCanvasEvents(viewportEl, canvasEl) {
   viewportEl.addEventListener("pointerdown", async (e) => {
+    viewportEl.focus({ preventScroll: true });
     if (e.button === 2) {
       e.preventDefault();
       await acceptCurrentCommand();
@@ -3885,71 +4045,51 @@ function calculatePolygonArea(pts) {
 }
 
 // Command Bar and Keyboard handling
-function bindCommandBarEvents() {
-  window.addEventListener("keydown", (e) => {
-    if (e.key === "Delete" || e.key === "Backspace") {
-      if (document.activeElement !== $("#commandInput") && document.activeElement !== $("#newLayerInput")) {
-        eraseSelected();
-      }
-    }
-    if (e.key === "Escape") {
-      points = [];
-      moveBasePoint = null;
-      isBoxSelecting = false;
-      chooseTool("select");
-      setStatus("Cancelled");
-    }
-    if (e.key === "F8") {
-      e.preventDefault();
-      toggleOrtho();
-    }
-    if (e.key === "F3") {
-      e.preventDefault();
-      toggleSnap();
-    }
-    if (e.ctrlKey && e.key.toLowerCase() === "z") {
-      e.preventDefault();
-      undoAction();
-    }
-    if (e.ctrlKey && (e.key.toLowerCase() === "y" || (e.shiftKey && e.key.toLowerCase() === "z"))) {
-      e.preventDefault();
-      redoAction();
-    }
-    if (e.ctrlKey && e.key.toLowerCase() === "s") {
-      e.preventDefault();
-      saveDrawing();
-    }
-    if (e.ctrlKey && e.key.toLowerCase() === "n") {
-      e.preventDefault();
-      $("#newBtn")?.click();
-    }
-    if (e.ctrlKey && e.key.toLowerCase() === "o") {
-      e.preventDefault();
-      openDrawing();
-    }
-    if (e.key === "Enter" && document.activeElement !== $("#commandInput")) {
-      if (activeTool === "line" && points.length > 0) {
-        points = [];
-        chooseTool("select");
-        setStatus("LINE finished");
-      }
-      if (activeTool === "polyline") finishPolyline(false);
-      if (activeTool === "spline") finishSpline();
-      if (activeTool === "revcloud") finishRevcloud();
-      if (activeTool === "area" && points.length >= 3) {
-        const res = calculatePolygonArea(points);
-        measureInfo = `Area = ${res.area.toFixed(2)} mm² (${(res.area / 1e6).toFixed(4)} m²) | Perimeter = ${res.perimeter.toFixed(2)} mm`;
-        setStatus(measureInfo);
-        points = [];
-        renderRibbon();
-        draw();
-      }
-    }
-  });
+function cancelCurrentCommand() {
+  points = [];
+  moveBasePoint = null;
+  activeGrip = null;
+  offsetTargetHandle = null;
+  currentSnap = null;
+  isBoxSelecting = false;
+  boxStart = null;
+  boxCurrent = null;
+  isPanning = false;
+  lastPan = null;
+  chooseTool("select");
+  setStatus(currentLang === "vi" ? "Đã hủy lệnh" : "Cancelled");
+}
 
+function handleGlobalKeyDown(event) {
+  const action = cadShortcut(event, !showStartScreen);
+  if (!action) return;
+  event.preventDefault();
+  const actions = {
+    new: () => $("#newBtn")?.click(),
+    open: openDrawing,
+    save: saveDrawing,
+    saveAs: saveDrawingAs,
+    undo: undoAction,
+    redo: redoAction,
+    erase: eraseSelected,
+    cancel: cancelCurrentCommand,
+    snap: toggleSnap,
+    ortho: toggleOrtho,
+    accept: acceptCurrentCommand,
+  };
+  void actions[action]();
+}
+
+function bindCommandBarEvents() {
   const cmdInput = $("#commandInput");
   if (cmdInput) {
     cmdInput.addEventListener("keydown", async (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (["Enter", "Escape", "ArrowUp", "ArrowDown"].includes(e.key)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      if (e.repeat && (e.key === "Enter" || e.key === "Escape")) return;
 
       if (e.key === "ArrowUp") {
         e.preventDefault();
@@ -3982,13 +4122,7 @@ function bindCommandBarEvents() {
         }
         e.currentTarget.value = "";
         if (!raw) {
-          if (activeTool === "line" && points.length > 0) {
-            points = [];
-            chooseTool("select");
-            setStatus("LINE finished");
-            return;
-          }
-          if (activeTool === "polyline") finishPolyline(false);
+          await acceptCurrentCommand();
           return;
         }
 
@@ -4116,8 +4250,7 @@ function bindCommandBarEvents() {
       }
       if (e.key === "Escape") {
         e.currentTarget.value = "";
-        points = [];
-        chooseTool("select");
+        cancelCurrentCommand();
       }
     });
   }
@@ -4168,21 +4301,20 @@ async function handleCoordinateInput(p) {
 
 // Initial Launch
 renderShell();
-new ResizeObserver(resize).observe($("#viewport"));
-resize();
 renderRibbon();
 render();
-const revealWindowAfterFirstPaint = async () => {
+const revealWindowAfterInitialization = async () => {
   const appWindow = getCurrentWindow();
   try {
     await sync(invoke("get_snapshot"));
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    // A hidden WebView may suspend animation frames. render()/resize() already
+    // prepare the shell synchronously; show it before waiting on any paint.
   } finally {
     await appWindow.show();
     await appWindow.setFocus();
   }
 };
-revealWindowAfterFirstPaint();
+revealWindowAfterInitialization();
 
 // Background autosave timer (Tuần 31: Drawing robustness)
 setInterval(async () => {
@@ -4236,11 +4368,7 @@ function renderDocumentTabs() {
       if (e.target.classList.contains("close-tab")) return;
       if (showStartScreen) enterEditor();
       if (id !== activeDocId) {
-        if (await sync(invoke("switch_drawing", { id }))) {
-          selectedHandles.clear();
-          points = [];
-          chooseTool("select");
-        }
+        await sync(invoke("switch_drawing", { id }));
       }
     };
   });
@@ -4261,9 +4389,6 @@ function renderDocumentTabs() {
         return;
       }
       if (await sync(invoke("new_drawing"))) {
-        selectedHandles.clear();
-        points = [];
-        chooseTool("select");
         setStatus(currentLang === "vi" ? `Đã tạo bản vẽ mới (${model.title})` : `New drawing created (${model.title})`);
       }
     };

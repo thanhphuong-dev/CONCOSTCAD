@@ -122,6 +122,21 @@ Trước khi chọn crate/engine, rà SPDX/license, notice, copyleft obligations
 
 ## 6. UI, render và hiệu năng
 
+### Tiến độ ưu tiên UI — 28-10-2026
+
+Theo yêu cầu ưu tiên UI, công việc hiện tập trung vào tuần 10, 22 và 28 trên shell Tauri hiện có:
+
+- ViewCube 2D đã bổ sung kéo xoay, góc nhìn N/E/S/W, Home, phím mũi tên và WCS đồng bộ. Có kiểm thử tự động và browser smoke; chưa nghiệm thu native với bản vẽ thực.
+- Đã sửa vòng đời shell: tháo listener/observer cũ khi đổi ngôn ngữ hoặc mở Start, quan sát lại canvas mới và theo dõi đổi DPI. Đã kiểm tra canvas bám kích thước khi kéo panel sau đổi ngôn ngữ bằng frontend chạy với IPC mô phỏng.
+- Đã sửa định tuyến phím: Backspace/Delete và Undo/Redo trong ô Properties không phát lệnh sửa bản vẽ; Ctrl+Shift+Z chỉ Redo; Enter/Space thống nhất luồng chấp nhận/lặp lại lệnh; phím đang nhập IME hoặc auto-repeat không phát lệnh CAD. Test UI được đưa vào CI.
+- MDI giữ zoom, pan, góc xoay, không gian Model/Paper, layout và vùng chọn riêng cho từng document tab; handle không còn tồn tại sẽ bị loại khỏi vùng chọn khi khôi phục. Chuyển tab hủy lệnh chờ điểm và thao tác kéo grip đang dở để tránh áp dụng nhầm sang bản vẽ khác; grips của các đối tượng đã chọn xuất hiện lại khi quay về.
+- Rà command UX: Enter và nút Finish/Close đều kết thúc PLINE; thiếu đỉnh thì hủy lệnh với thông báo. PLINE/SPLINE/REVCLOUD chỉ xóa preview và thoát công cụ sau khi backend xác nhận tạo thành công; nếu lệnh lỗi, các điểm còn lại để người dùng sửa hoặc thử lại.
+- Localization theo roadmap: lần chạy đầu dùng EN; nút ngôn ngữ chuyển EN/VI/KO và lưu lựa chọn. Catalog VI hiện còn thiếu chuỗi nên fallback về EN; KO mới là skeleton fallback. Theme/workspace persistence, kiểm tra key thiếu và Unicode/font smoke vẫn còn.
+- Chưa đóng các mục nghiệm thu tuần 22/28: công cụ chụp cửa sổ native còn timeout; cần kiểm tra Windows/WebView2, các mức DPI, mở/sửa/lưu fixture và thao tác kéo dài. Browser fixture chỉ xác minh frontend, không chứng minh Rust hoặc DWG.
+- Tiếp theo: rà chuỗi thao tác command line theo tuần 28, bổ sung kiểm tra fallback/key thiếu và settings theme/workspace theo tuần 23, rồi tiếp tục nghiệm thu native. Trạng thái lệnh đang chạy được hủy khi chuyển document; command history vẫn dùng chung. Giữ các gate DWG/DXF và phạm vi 1.0 ở các mục khác; chưa đánh dấu hoàn tất dựa trên tiến độ UI.
+
+### Yêu cầu render và hiệu năng
+
 - Canvas render theo viewport; cull trước khi vẽ; pan/zoom không rebuild hình học bất biến.
 - Tessellation ARC/bulge theo sai số pixel có giới hạn segment; snap/hit-test dùng hình học chính xác hoặc tolerance có định nghĩa.
 - R-tree/BVH và index segment polyline chỉ thêm khi workload cần; giữ brute-force oracle để kiểm chứng.

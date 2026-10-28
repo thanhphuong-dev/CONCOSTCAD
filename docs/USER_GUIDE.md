@@ -6,7 +6,7 @@ Chào mừng bạn đến với **CONCOSTCAD** – Phần mềm đồ họa kỹ
 
 ## 1. GIAO DIỆN LÀM VIỆC (WORKSPACE OVERVIEW)
 
-- **Thanh tiêu đề (Title Bar):** Tên bản vẽ hiện hành, trạng thái sửa đổi (`*`), nút chuyển đổi ngôn ngữ Việt / Anh (`VI/EN`), và điều khiển cửa sổ.
+- **Thanh tiêu đề (Title Bar):** Tên bản vẽ hiện hành, trạng thái sửa đổi (`*`), nút chuyển ngôn ngữ (`EN` / `VI` / `KO`) và điều khiển cửa sổ. Lần chạy đầu dùng EN; ngôn ngữ đã chọn được lưu. Chuỗi chưa dịch và catalog KO hiện dùng nội dung EN dự phòng.
 - **Dải ruy-băng lệnh (Ribbon):** Phân nhóm trực quan theo thẻ:
   - **Home / Vẽ (Draw):** Các công cụ tạo hình học cơ bản (Line, Arc, Polyline, Circle, Rectangle, Text).
   - **Hiệu chỉnh (Modify):** Di chuyển (Move), Sao chép (Copy), Xoay (Rotate), Lấy đối xứng (Mirror), Bo góc (Fillet), Vát mép (Chamfer), Cắt xén (Trim), Kéo dài (Extend), Gộp (Join), Phân rã (Explode).
@@ -32,6 +32,8 @@ Chào mừng bạn đến với **CONCOSTCAD** – Phần mềm đồ họa kỹ
 | **Thêm/Bớt chọn (Shift-Select)** | Giữ phím `Shift` khi nhấp chọn để đảo trạng thái chọn đối tượng | `Shift + Click` |
 | **Hủy thao tác (Cancel)** | Phím `Escape` | `Esc` |
 | **Lặp lại lệnh trước (Repeat)** | Nhấn phím `Space` hoặc `Enter` khi không có lệnh đang chạy | `Space` / `Enter` |
+
+Khi đang sửa ô Properties, tên lớp hoặc dòng lệnh, Backspace/Delete và Ctrl+Z/Ctrl+Y dành cho nội dung ô nhập. Nhấp vùng vẽ để đưa focus về canvas trước khi dùng phím xóa hoặc Undo/Redo đối tượng. Ctrl+Shift+Z thực hiện Redo; Ctrl+Shift+S mở Save As. Enter/Space trên nút giao diện kích hoạt nút đó. Phím Enter đang dùng để hoàn tất nhập tiếng Việt/IME không được xem là lệnh CAD.
 
 ---
 
@@ -72,6 +74,7 @@ Chào mừng bạn đến với **CONCOSTCAD** – Phần mềm đồ họa kỹ
 - **AREA (`AA`):** Tính diện tích và chu vi đa giác hoặc hình khép kín theo thuật toán Shoelace.
 
 ### D. Lệnh điều khiển vùng nhìn & Xuất bản vẽ (View & Export)
+- **ViewCube 2D (góc trên bên phải):** Nhấp N/E/S/W để đưa hướng đó lên trên. Nhấp mặt TOP để trở về hướng Bắc, giữ nguyên tâm nhìn và độ thu phóng. Kéo ngang mặt TOP hoặc vòng la bàn để xoay góc nhìn liên tục; thả chuột để giữ góc, nhấn Escape trong khi kéo để trở về góc ban đầu. Các nút ↶/↷ xoay vùng nhìn 90°. Nút Home (hình ngôi nhà) đưa hướng Bắc lên trên và thu phóng vừa các đối tượng đang hiển thị; bản vẽ trống trở về tâm gốc và zoom 1:1. Khi mặt TOP có focus, dùng ←/→ để xoay 15°, Shift + ←/→ để xoay 45°, phím Home để về hướng Bắc. La bàn, số đo góc và biểu tượng trục WCS cập nhật theo góc nhìn. Đây là điều khiển góc nhìn trên mặt phẳng XY, không sửa tọa độ đối tượng hoặc tạo lịch sử Undo.
 - **ZOOM EXTENTS (`ZE`):** Tự động thu phóng và căn chỉnh toàn bộ hình vẽ vừa vặn màn hình.
 - **ZOOM OBJECT (`ZS` / `ZO`):** Thu phóng vừa vặn các đối tượng đang được chọn.
 - **PLOT / EXPORT (`EXPORT` / `PLOT` / `PRINT`):** Xuất toàn bộ bản vẽ hiện hành sang tệp tin ảnh PNG độ nét cao để in ấn, gửi duyệt hoặc lập hồ sơ báo cáo.
@@ -83,3 +86,4 @@ Chào mừng bạn đến với **CONCOSTCAD** – Phần mềm đồ họa kỹ
 1. **Mở tệp DWG/DXF:** Nhấp biểu tượng `📂` (Open) trên thanh công cụ hoặc gõ lệnh `OPEN`. Hỗ trợ các bản vẽ từ AutoCAD R12 đến AutoCAD 2018+.
 2. **Lưu tệp an toàn (Atomic Staging):** Nhấp `💾` (Save) hoặc nhấn `Ctrl+S`. CONCOSTCAD lưu bản vẽ qua giai đoạn tệp tạm trung gian trước khi ghi đè, đảm bảo không bao giờ làm hỏng hay mất mát bản vẽ gốc ngay cả khi có sự cố mất điện đột ngột.
 3. **Tự động lưu (Autosave):** Bản vẽ có chỉnh sửa (dirty) được tự động lưu dự phòng định kỳ mỗi 3 phút.
+4. **Document tabs:** Mỗi bản vẽ giữ góc nhìn, mức zoom, vùng pan, Model/Paper space, Layout đã thêm và các đối tượng đang chọn khi chuyển giữa các tab. Layout riêng của bản vẽ khác được ẩn cho tới khi quay lại tab đó. Lệnh đang chờ điểm và thao tác kéo grip bị hủy khi đổi bản vẽ; đối tượng đang chọn và grip của chúng được khôi phục khi quay lại.
