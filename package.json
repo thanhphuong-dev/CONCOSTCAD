@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "check:locales": "node scripts/check-locales.js",
     "test:ui": "node --test src-ui/*.test.js",
     "test:viewcube": "node --test src-ui/view-cube.test.js",
     "dev": "vite --host 127.0.0.1 --port 1420",

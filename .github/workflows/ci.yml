@@ -28,6 +28,9 @@ jobs:
       - name: Build Frontend (Vite)
         run: npm run build
 
+      - name: Check Localization Catalog
+        run: npm run check:locales
+
       - name: Test UI Input and View Navigation
         run: npm run test:ui
 
