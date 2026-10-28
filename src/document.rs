@@ -1,6 +1,11 @@
 #![allow(dead_code)]
-use crate::geometry::{line_circle_intersections, line_line_intersection, positive_angle};
+use crate::geometry::{
+    Point2, bulge_geometry, line_arc_intersections, line_circle_intersections,
+    line_line_intersection, point_arc_distance, point_bulge_segment_distance,
+    point_segment_distance, polyline_metrics, positive_angle,
+};
 use acadrust::entities::{Arc, Circle, EntityType, Line, LwPolyline, LwVertex, Text};
+use acadrust::objects::ObjectType;
 use acadrust::tables::Layer;
 use acadrust::types::{Handle, Vector2, Vector3};
 use acadrust::{CadDocument as CadFile, DwgReader, DwgWriter, DxfReader, DxfWriter};
@@ -21,6 +26,8 @@ pub enum DrawingFormat {
     Dwg,
     Dxf,
 }
+
+pub type LayerProperties<'a> = (Handle, &'a str, bool, bool, bool, Option<(u8, u8, u8)>);
 
 impl DrawingFormat {
     fn from_path(path: &Path) -> Result<Self, String> {
@@ -103,6 +110,10 @@ impl DrawingDocument {
         self.state_id
     }
 
+    pub fn validate_invariants(&self) -> Result<(), String> {
+        validate_cad_identity(&self.cad)
+    }
+
     pub fn save_snapshot(&self) -> Self {
         Self {
             id: self.id,
@@ -119,10 +130,10 @@ impl DrawingDocument {
 
     pub fn complete_save(&mut self, path: PathBuf, saved_state_id: u64) -> Result<(), String> {
         let format = DrawingFormat::from_path(&path)?;
-        if let Some(source_format) = self.source_format {
-            if source_format != format {
-                return Err("Save As to another CAD format is disabled until conversion-loss reporting is available".to_owned());
-            }
+        if let Some(source_format) = self.source_format
+            && source_format != format
+        {
+            return Err("Save As to another CAD format is disabled until conversion-loss reporting is available".to_owned());
         }
         self.path = Some(path);
         self.source_format = Some(format);
@@ -139,16 +150,88 @@ impl DrawingDocument {
     }
 
     pub fn unpreservable_unknown_count(&self, format: DrawingFormat) -> usize {
-        self.cad
+        let entity_count = self
+            .cad
             .entities()
             .filter(|entity| match entity {
                 EntityType::Unknown(unknown) => match format {
-                    DrawingFormat::Dwg => unknown.raw_dwg_data.is_none(),
+                    DrawingFormat::Dwg => {
+                        unknown.raw_dwg_data.is_none()
+                            || unknown
+                                .dwg_source_version
+                                .is_some_and(|version| version != self.cad.version)
+                    }
                     DrawingFormat::Dxf => unknown.raw_dxf_codes.is_none(),
                 },
                 _ => false,
             })
-            .count()
+            .count();
+        let object_count = self
+            .cad
+            .objects
+            .values()
+            .filter(|object| match object {
+                ObjectType::Unknown {
+                    raw_dwg_data,
+                    raw_dwg_version,
+                    raw_dxf_codes,
+                    ..
+                } => match format {
+                    DrawingFormat::Dwg => {
+                        raw_dwg_data.is_none()
+                            || raw_dwg_version.is_some_and(|version| version != self.cad.version)
+                    }
+                    DrawingFormat::Dxf => raw_dxf_codes.is_none(),
+                },
+                _ => false,
+            })
+            .count();
+        entity_count + object_count
+    }
+
+    pub fn save_warnings(&self, format: DrawingFormat) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let unsupported_entities = self
+            .cad
+            .entities()
+            .filter(|entity| matches!(entity, EntityType::Unknown(_)))
+            .count();
+        let unsupported_objects = self
+            .cad
+            .objects
+            .values()
+            .filter(|object| matches!(object, ObjectType::Unknown { .. }))
+            .count();
+
+        if unsupported_entities > 0 {
+            warnings.push(format!(
+                "{unsupported_entities} unsupported entities are present. They will be preserved only if their raw {format:?} data and source version are compatible."
+            ));
+        }
+        if unsupported_objects > 0 {
+            warnings.push(format!(
+                "{unsupported_objects} unsupported objects are present. They will be preserved only if their raw {format:?} data and source version are compatible."
+            ));
+        }
+
+        for notification in self.cad.notifications.iter() {
+            if matches!(
+                notification.notification_type,
+                acadrust::notification::NotificationType::NotImplemented
+                    | acadrust::notification::NotificationType::NotSupported
+                    | acadrust::notification::NotificationType::Error
+            ) {
+                warnings.push(notification.to_string());
+            }
+        }
+        warnings.sort();
+        warnings.dedup();
+        warnings
+    }
+
+    pub fn save_warnings_for_path(&self, path: impl AsRef<Path>) -> Result<Vec<String>, String> {
+        let format = DrawingFormat::from_path(path.as_ref())?;
+        Ok(self.save_warnings(format))
     }
 
     pub fn model_space_entities(&self) -> impl Iterator<Item = &EntityType> + '_ {
@@ -159,9 +242,134 @@ impl DrawingDocument {
         self.cad.get_entity(handle)
     }
 
-    pub fn layers(&self) -> impl Iterator<Item = (&str, bool, bool, bool, Option<(u8, u8, u8)>)> {
+    pub fn hit_test_entity(&self, point: Vector2, tolerance: f64, zoom: f64) -> Option<Handle> {
+        if !finite2(point)
+            || !tolerance.is_finite()
+            || tolerance < 0.0
+            || !zoom.is_finite()
+            || zoom <= 0.0
+        {
+            return None;
+        }
+        let point = Point2::new(point.x, point.y);
+        let mut best: Option<(Handle, f64)> = None;
+
+        for entity in self.cad.model_space_entities() {
+            let common = entity.common();
+            if self
+                .cad
+                .layers
+                .get(&common.layer)
+                .is_some_and(|layer| layer.flags.off || layer.flags.frozen)
+            {
+                continue;
+            }
+
+            let candidate = match entity {
+                EntityType::Line(line) => point_segment_distance(
+                    point,
+                    Point2::new(line.start.x, line.start.y),
+                    Point2::new(line.end.x, line.end.y),
+                )
+                .map(|distance| (distance, tolerance)),
+                EntityType::Arc(arc) => point_arc_distance(
+                    point,
+                    Point2::new(arc.center.x, arc.center.y),
+                    arc.radius,
+                    arc.start_angle,
+                    arc.end_angle,
+                )
+                .map(|distance| (distance, tolerance)),
+                EntityType::Circle(circle) => {
+                    let radial = point.distance(Point2::new(circle.center.x, circle.center.y));
+                    Some(((radial - circle.radius).abs(), tolerance))
+                }
+                EntityType::LwPolyline(polyline) => {
+                    let vertices = &polyline.vertices;
+                    let segment_count = if polyline.is_closed {
+                        vertices.len()
+                    } else {
+                        vertices.len().saturating_sub(1)
+                    };
+                    let mut distance = f64::INFINITY;
+                    for index in 0..segment_count {
+                        let a = vertices[index];
+                        let b = vertices[(index + 1) % vertices.len()];
+                        let Some(segment_distance) = point_bulge_segment_distance(
+                            point,
+                            Point2::new(a.location.x, a.location.y),
+                            Point2::new(b.location.x, b.location.y),
+                            a.bulge,
+                        ) else {
+                            continue;
+                        };
+                        distance = distance.min(segment_distance);
+                    }
+                    Some((distance, tolerance))
+                }
+                EntityType::Text(text) => {
+                    // Match the canvas text transform and minimum 10 px font size.
+                    // Font metrics remain approximate because the actual face is rendered by WebView.
+                    let height = text.height.max(10.0 / zoom);
+                    let dx = point.x - text.insertion_point.x;
+                    let dy = point.y - text.insertion_point.y;
+                    let cos = text.rotation.cos();
+                    let sin = text.rotation.sin();
+                    let local_x = dx * cos + dy * sin;
+                    let local_y = -dx * sin + dy * cos;
+                    let width = text
+                        .value
+                        .chars()
+                        .map(|character| {
+                            if matches!(
+                                character as u32,
+                                0x1100..=0x115F
+                                    | 0x2E80..=0xA4CF
+                                    | 0xAC00..=0xD7AF
+                                    | 0xF900..=0xFAFF
+                                    | 0xFE30..=0xFE4F
+                                    | 0xFF00..=0xFF60
+                                    | 0xFFE0..=0xFFE6
+                            ) {
+                                height
+                            } else {
+                                height * 0.6
+                            }
+                        })
+                        .sum::<f64>();
+                    let dx = (-local_x).max(0.0).max(local_x - width);
+                    let dy = (-height - local_y).max(0.0).max(local_y - height * 0.2);
+                    Some((dx.hypot(dy), tolerance))
+                }
+                EntityType::Insert(insert) => {
+                    let distance =
+                        (point.x - insert.insert_point.x).hypot(point.y - insert.insert_point.y);
+                    let scale = insert.x_scale().abs().max(insert.y_scale().abs());
+                    let limit = tolerance.max((12.0_f64).max(20.0 * scale) / zoom * 0.5);
+                    Some((distance, limit))
+                }
+                _ => None,
+            };
+            let Some((distance, limit)) = candidate else {
+                continue;
+            };
+
+            if distance.is_finite()
+                && limit.is_finite()
+                && distance <= limit
+                && best.is_none_or(|(_, best_distance)| distance < best_distance)
+            {
+                best = Some((common.handle, distance));
+            }
+        }
+
+        best.map(|(handle, _)| handle)
+    }
+
+    pub fn layers(&self) -> impl Iterator<Item = LayerProperties<'_>> + '_ {
         self.cad.layers.iter().map(|layer| {
             (
+                layer.handle,
                 layer.name.as_str(),
                 layer.flags.frozen,
                 layer.flags.off,
@@ -190,20 +398,19 @@ impl DrawingDocument {
         if self.cad.layers.get(name).is_some() {
             return Err("A layer with that name already exists".to_owned());
         }
-        self.begin_change();
-        self.cad
+        let mut staged = self.cad.clone();
+        staged
             .layers
             .add(Layer::new(name))
             .map_err(|e| e.to_string())?;
-        self.cad.assign_table_entry_handles();
-        self.cad.header.current_layer_name = name.to_owned();
-        self.cad.header.current_layer_handle = self
-            .cad
+        staged.assign_table_entry_handles();
+        staged.header.current_layer_name = name.to_owned();
+        staged.header.current_layer_handle = staged
             .layers
             .get(name)
             .map(|layer| layer.handle)
             .unwrap_or(Handle::NULL);
-        self.advance_state();
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -226,11 +433,11 @@ impl DrawingDocument {
             .layers
             .get(old_name)
             .ok_or_else(|| format!("Layer '{old_name}' does not exist"))?;
-        self.begin_change();
-        self.cad
+        let mut staged = self.cad.clone();
+        staged
             .rename_layer(old_name, new_name)
             .map_err(|e| e.to_string())?;
-        self.advance_state();
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -252,10 +459,10 @@ impl DrawingDocument {
             return Ok(());
         }
         let handle = layer.handle;
-        self.begin_change();
-        self.cad.header.current_layer_name = name.to_owned();
-        self.cad.header.current_layer_handle = handle;
-        self.advance_state();
+        let mut staged = self.cad.clone();
+        staged.header.current_layer_name = name.to_owned();
+        staged.header.current_layer_handle = handle;
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -275,11 +482,11 @@ impl DrawingDocument {
         if entity.common().layer.eq_ignore_ascii_case(name) {
             return Ok(());
         }
-        self.begin_change();
-        if let Some(entity) = self.cad.get_entity_mut(handle) {
+        let mut staged = self.cad.clone();
+        if let Some(entity) = staged.get_entity_mut(handle) {
             entity.common_mut().layer = name.to_owned();
         }
-        self.advance_state();
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -312,13 +519,13 @@ impl DrawingDocument {
                 "Set another current layer before freezing or turning off this layer".to_owned(),
             );
         }
-        self.begin_change();
-        if let Some(layer) = self.cad.layers.get_mut(name) {
+        let mut staged = self.cad.clone();
+        if let Some(layer) = staged.layers.get_mut(name) {
             layer.flags.frozen = frozen;
             layer.flags.off = off;
             layer.flags.locked = locked;
         }
-        self.advance_state();
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -327,11 +534,11 @@ impl DrawingDocument {
             .layers
             .get(name)
             .ok_or_else(|| format!("Layer '{name}' does not exist"))?;
-        self.begin_change();
-        if let Some(layer) = self.cad.layers.get_mut(name) {
+        let mut staged = self.cad.clone();
+        if let Some(layer) = staged.layers.get_mut(name) {
             layer.color = acadrust::types::Color::from_rgb(r, g, b);
         }
-        self.advance_state();
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -364,38 +571,60 @@ impl DrawingDocument {
         let d1 = Vector2::new(p1.x + h * nx, p1.y + h * ny);
         let d2 = Vector2::new(p2.x + h * nx, p2.y + h * ny);
 
-        self.begin_change();
+        let mut staged = self.cad.clone();
         let mut handles = Vec::new();
-        let layer = self.cad.header.current_layer_name.clone();
+        let layer = staged.header.current_layer_name.clone();
 
         let ext1_s = Vector2::new(p1.x + 0.5 * sign * nx, p1.y + 0.5 * sign * ny);
         let ext1_e = Vector2::new(d1.x + 1.2 * sign * nx, d1.y + 1.2 * sign * ny);
         let mut l1 = Line::from_coords(ext1_s.x, ext1_s.y, 0.0, ext1_e.x, ext1_e.y, 0.0);
         l1.common.layer = layer.clone();
-        handles.push(self.cad.add_entity(EntityType::Line(l1)).map_err(|e| e.to_string())?);
+        handles.push(
+            staged
+                .add_entity(EntityType::Line(l1))
+                .map_err(|e| e.to_string())?,
+        );
 
         let ext2_s = Vector2::new(p2.x + 0.5 * sign * nx, p2.y + 0.5 * sign * ny);
         let ext2_e = Vector2::new(d2.x + 1.2 * sign * nx, d2.y + 1.2 * sign * ny);
         let mut l2 = Line::from_coords(ext2_s.x, ext2_s.y, 0.0, ext2_e.x, ext2_e.y, 0.0);
         l2.common.layer = layer.clone();
-        handles.push(self.cad.add_entity(EntityType::Line(l2)).map_err(|e| e.to_string())?);
+        handles.push(
+            staged
+                .add_entity(EntityType::Line(l2))
+                .map_err(|e| e.to_string())?,
+        );
 
         let mut dline = Line::from_coords(d1.x, d1.y, 0.0, d2.x, d2.y, 0.0);
         dline.common.layer = layer.clone();
-        handles.push(self.cad.add_entity(EntityType::Line(dline)).map_err(|e| e.to_string())?);
+        handles.push(
+            staged
+                .add_entity(EntityType::Line(dline))
+                .map_err(|e| e.to_string())?,
+        );
 
         let tick_len = 1.2;
         let tx = (ux + nx) * 0.707 * tick_len;
         let ty = (uy + ny) * 0.707 * tick_len;
         let mut t1 = Line::from_coords(d1.x - tx, d1.y - ty, 0.0, d1.x + tx, d1.y + ty, 0.0);
         t1.common.layer = layer.clone();
-        handles.push(self.cad.add_entity(EntityType::Line(t1)).map_err(|e| e.to_string())?);
+        handles.push(
+            staged
+                .add_entity(EntityType::Line(t1))
+                .map_err(|e| e.to_string())?,
+        );
 
         let mut t2 = Line::from_coords(d2.x - tx, d2.y - ty, 0.0, d2.x + tx, d2.y + ty, 0.0);
         t2.common.layer = layer.clone();
-        handles.push(self.cad.add_entity(EntityType::Line(t2)).map_err(|e| e.to_string())?);
+        handles.push(
+            staged
+                .add_entity(EntityType::Line(t2))
+                .map_err(|e| e.to_string())?,
+        );
 
-        let val = text_override.map(|s| s.to_owned()).unwrap_or_else(|| format!("{:.2}", len));
+        let val = text_override
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| format!("{:.2}", len));
         let mid_x = (d1.x + d2.x) * 0.5 + 0.8 * sign * nx;
         let mid_y = (d1.y + d2.y) * 0.5 + 0.8 * sign * ny;
         let mut rot = dy.atan2(dx);
@@ -406,9 +635,14 @@ impl DrawingDocument {
         text.height = 2.5;
         text.rotation = rot;
         text.common.layer = layer;
-        handles.push(self.cad.add_entity(EntityType::Text(text)).map_err(|e| e.to_string())?);
+        handles.push(
+            staged
+                .add_entity(EntityType::Text(text))
+                .map_err(|e| e.to_string())?,
+        );
 
-        self.advance_state();
+        ensure_entities_geometry_valid(&staged, &handles, "DIMENSION")?;
+        self.commit_staged_change(staged)?;
         Ok(handles)
     }
 
@@ -421,26 +655,25 @@ impl DrawingDocument {
         if !finite2(start) || !finite2(end) || start == end {
             return Err("LINE requires two distinct finite points".to_owned());
         }
-        self.ensure_current_layer_editable()?;
         if !matches!(self.cad.get_entity(handle), Some(EntityType::Line(_))) {
             return Err("Selected entity is not a LINE".to_owned());
         }
-        if let Some(EntityType::Line(line)) = self.cad.get_entity(handle) {
-            if line.start.x == start.x
-                && line.start.y == start.y
-                && line.end.x == end.x
-                && line.end.y == end.y
-            {
-                return Ok(());
-            }
+        if let Some(EntityType::Line(line)) = self.cad.get_entity(handle)
+            && line.start.x == start.x
+            && line.start.y == start.y
+            && line.end.x == end.x
+            && line.end.y == end.y
+        {
+            return Ok(());
         }
         self.ensure_entity_layer_editable(handle)?;
-        self.begin_change();
-        if let Some(EntityType::Line(line)) = self.cad.get_entity_mut(handle) {
+        let mut staged = self.cad.clone();
+        if let Some(EntityType::Line(line)) = staged.get_entity_mut(handle) {
             line.start = Vector3::new(start.x, start.y, line.start.z);
             line.end = Vector3::new(end.x, end.y, line.end.z);
         }
-        self.advance_state();
+        ensure_entities_geometry_valid(&staged, &[handle], "LINE edit")?;
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -469,30 +702,29 @@ impl DrawingDocument {
                 "ARC start and end angles must define a non-zero, non-full sweep".to_owned(),
             );
         }
-        self.ensure_current_layer_editable()?;
         if !matches!(self.cad.get_entity(handle), Some(EntityType::Arc(_))) {
             return Err("Selected entity is not an ARC".to_owned());
         }
-        if let Some(EntityType::Arc(arc)) = self.cad.get_entity(handle) {
-            if arc.center.x == center.x
-                && arc.center.y == center.y
-                && arc.radius == radius
-                && arc.start_angle == start
-                && arc.end_angle == end
-            {
-                return Ok(());
-            }
+        if let Some(EntityType::Arc(arc)) = self.cad.get_entity(handle)
+            && arc.center.x == center.x
+            && arc.center.y == center.y
+            && arc.radius == radius
+            && arc.start_angle == start
+            && arc.end_angle == end
+        {
+            return Ok(());
         }
         self.ensure_entity_layer_editable(handle)?;
-        self.begin_change();
-        if let Some(EntityType::Arc(arc)) = self.cad.get_entity_mut(handle) {
+        let mut staged = self.cad.clone();
+        if let Some(EntityType::Arc(arc)) = staged.get_entity_mut(handle) {
             arc.center.x = center.x;
             arc.center.y = center.y;
             arc.radius = radius;
             arc.start_angle = start;
             arc.end_angle = end;
         }
-        self.advance_state();
+        ensure_entities_geometry_valid(&staged, &[handle], "ARC edit")?;
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -501,27 +733,38 @@ impl DrawingDocument {
             return Err("CIRCLE requires a positive radius and finite center".to_owned());
         }
         self.ensure_current_layer_editable()?;
-        self.begin_change();
         let mut circle = Circle::from_coords(center.x, center.y, 0.0, radius);
         circle.common.layer = self.cad.header.current_layer_name.clone();
         self.add_entity(EntityType::Circle(circle))
     }
 
-    pub fn replace_circle(&mut self, handle: Handle, center: Vector2, radius: f64) -> Result<(), String> {
+    pub fn replace_circle(
+        &mut self,
+        handle: Handle,
+        center: Vector2,
+        radius: f64,
+    ) -> Result<(), String> {
         if !finite2(center) || !radius.is_finite() || radius <= 0.0 {
             return Err("CIRCLE requires a positive radius and finite center".to_owned());
         }
-        self.ensure_current_layer_editable()?;
         if !matches!(self.cad.get_entity(handle), Some(EntityType::Circle(_))) {
             return Err("Selected entity is not a CIRCLE".to_owned());
         }
+        if let Some(EntityType::Circle(circle)) = self.cad.get_entity(handle)
+            && circle.center.x == center.x
+            && circle.center.y == center.y
+            && circle.radius == radius
+        {
+            return Ok(());
+        }
         self.ensure_entity_layer_editable(handle)?;
-        self.begin_change();
-        if let Some(EntityType::Circle(circle)) = self.cad.get_entity_mut(handle) {
+        let mut staged = self.cad.clone();
+        if let Some(EntityType::Circle(circle)) = staged.get_entity_mut(handle) {
             circle.center = Vector3::new(center.x, center.y, 0.0);
             circle.radius = radius;
         }
-        self.advance_state();
+        ensure_entities_geometry_valid(&staged, &[handle], "CIRCLE edit")?;
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -536,10 +779,11 @@ impl DrawingDocument {
             return Err("TEXT value cannot be empty".to_owned());
         }
         if !finite2(position) || !height.is_finite() || height <= 0.0 || !rotation_rad.is_finite() {
-            return Err("TEXT requires a positive height and finite position and rotation".to_owned());
+            return Err(
+                "TEXT requires a positive height and finite position and rotation".to_owned(),
+            );
         }
         self.ensure_current_layer_editable()?;
-        self.begin_change();
         let mut text = Text::with_value(value, Vector3::new(position.x, position.y, 0.0));
         text.height = height;
         text.rotation = positive_angle(rotation_rad);
@@ -559,21 +803,32 @@ impl DrawingDocument {
             return Err("TEXT value cannot be empty".to_owned());
         }
         if !finite2(position) || !height.is_finite() || height <= 0.0 || !rotation_rad.is_finite() {
-            return Err("TEXT requires a positive height and finite position and rotation".to_owned());
+            return Err(
+                "TEXT requires a positive height and finite position and rotation".to_owned(),
+            );
         }
-        self.ensure_current_layer_editable()?;
         if !matches!(self.cad.get_entity(handle), Some(EntityType::Text(_))) {
             return Err("Selected entity is not a TEXT".to_owned());
         }
+        if let Some(EntityType::Text(text)) = self.cad.get_entity(handle)
+            && text.value == value
+            && text.insertion_point.x == position.x
+            && text.insertion_point.y == position.y
+            && text.height == height
+            && text.rotation == positive_angle(rotation_rad)
+        {
+            return Ok(());
+        }
         self.ensure_entity_layer_editable(handle)?;
-        self.begin_change();
-        if let Some(EntityType::Text(text)) = self.cad.get_entity_mut(handle) {
+        let mut staged = self.cad.clone();
+        if let Some(EntityType::Text(text)) = staged.get_entity_mut(handle) {
             text.value = value.to_owned();
             text.insertion_point = Vector3::new(position.x, position.y, 0.0);
             text.height = height;
             text.rotation = positive_angle(rotation_rad);
         }
-        self.advance_state();
+        ensure_entities_geometry_valid(&staged, &[handle], "TEXT edit")?;
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -588,10 +843,17 @@ impl DrawingDocument {
             }
             self.ensure_entity_layer_editable(h)?;
         }
+        ensure_entities_geometry_valid(&self.cad, &handles, "JOIN")?;
 
         // Convert each entity into a chain of LwVertex
         let mut chains: Vec<Vec<LwVertex>> = Vec::new();
-        let first_layer = self.cad.get_entity(handles[0]).unwrap().common().layer.clone();
+        let first_layer = self
+            .cad
+            .get_entity(handles[0])
+            .unwrap()
+            .common()
+            .layer
+            .clone();
 
         for &h in &handles {
             match self.cad.get_entity(h).unwrap() {
@@ -612,10 +874,7 @@ impl DrawingDocument {
                     );
                     let sweep = positive_angle(arc.end_angle - arc.start_angle);
                     let bulge = (sweep * 0.25).tan();
-                    chains.push(vec![
-                        LwVertex::with_bulge(s_pt, bulge),
-                        LwVertex::new(e_pt),
-                    ]);
+                    chains.push(vec![LwVertex::with_bulge(s_pt, bulge), LwVertex::new(e_pt)]);
                 }
                 EntityType::LwPolyline(poly) => {
                     if poly.is_closed {
@@ -623,7 +882,11 @@ impl DrawingDocument {
                     }
                     chains.push(poly.vertices.clone());
                 }
-                _ => return Err("Only LINE, ARC, and open POLYLINE entities can be joined".to_owned()),
+                _ => {
+                    return Err(
+                        "Only LINE, ARC, and open POLYLINE entities can be joined".to_owned()
+                    );
+                }
             }
         }
 
@@ -683,21 +946,31 @@ impl DrawingDocument {
 
         // Check if endpoints meet to form a closed polyline
         let mut closed = false;
-        if merged.len() >= 3 && dist(merged.first().unwrap().location, merged.last().unwrap().location) < 1e-4 {
+        if merged.len() >= 3
+            && dist(
+                merged.first().unwrap().location,
+                merged.last().unwrap().location,
+            ) < 1e-4
+        {
             merged.pop();
             closed = true;
         }
 
-        self.begin_change();
+        let mut staged = self.cad.clone();
         for &h in &handles {
-            let _ = self.cad.remove_entity(h);
+            staged
+                .remove_entity(h)
+                .ok_or_else(|| "A selected entity no longer exists".to_owned())?;
         }
         let mut poly = LwPolyline::new();
         poly.vertices = merged;
         poly.is_closed = closed;
         poly.common.layer = first_layer;
-        let new_h = self.cad.add_entity(EntityType::LwPolyline(poly)).map_err(|e| e.to_string())?;
-        self.advance_state();
+        let new_h = staged
+            .add_entity(EntityType::LwPolyline(poly))
+            .map_err(|e| e.to_string())?;
+        ensure_entities_geometry_valid(&staged, &[new_h], "JOIN")?;
+        self.commit_staged_change(staged)?;
         Ok(new_h)
     }
 
@@ -713,8 +986,16 @@ impl DrawingDocument {
         if h1 == h2 {
             return Err("FILLET requires two different lines".to_owned());
         }
-        let e1 = self.cad.get_entity(h1).cloned().ok_or("First line no longer exists")?;
-        let e2 = self.cad.get_entity(h2).cloned().ok_or("Second line no longer exists")?;
+        let e1 = self
+            .cad
+            .get_entity(h1)
+            .cloned()
+            .ok_or("First line no longer exists")?;
+        let e2 = self
+            .cad
+            .get_entity(h2)
+            .cloned()
+            .ok_or("Second line no longer exists")?;
         let (l1, l2) = match (&e1, &e2) {
             (EntityType::Line(l1), EntityType::Line(l2)) => (l1, l2),
             _ => return Err("FILLET currently supports two LINE entities".to_owned()),
@@ -738,17 +1019,18 @@ impl DrawingDocument {
         let d2_e = (p4.x - inter.x).hypot(p4.y - inter.y);
         let far2 = if d2_s >= d2_e { p3 } else { p4 };
 
-        self.begin_change();
         if radius < 1e-6 {
-            if let Some(EntityType::Line(line)) = self.cad.get_entity_mut(h1) {
+            let mut staged = self.cad.clone();
+            if let Some(EntityType::Line(line)) = staged.get_entity_mut(h1) {
                 line.start = Vector3::new(far1.x, far1.y, line.start.z);
                 line.end = Vector3::new(inter.x, inter.y, line.end.z);
             }
-            if let Some(EntityType::Line(line)) = self.cad.get_entity_mut(h2) {
+            if let Some(EntityType::Line(line)) = staged.get_entity_mut(h2) {
                 line.start = Vector3::new(far2.x, far2.y, line.start.z);
                 line.end = Vector3::new(inter.x, inter.y, line.end.z);
             }
-            self.advance_state();
+            ensure_entities_geometry_valid(&staged, &[h1, h2], "FILLET")?;
+            self.commit_staged_change(staged)?;
             return Ok((h1, h2, None));
         }
 
@@ -778,13 +1060,17 @@ impl DrawingDocument {
         }
         let bisector = Vector2::new(sum.x / sum_len, sum.y / sum_len);
         let center_dist = radius / half_angle.sin();
-        let center = Vector2::new(inter.x + center_dist * bisector.x, inter.y + center_dist * bisector.y);
+        let center = Vector2::new(
+            inter.x + center_dist * bisector.x,
+            inter.y + center_dist * bisector.y,
+        );
 
-        if let Some(EntityType::Line(line)) = self.cad.get_entity_mut(h1) {
+        let mut staged = self.cad.clone();
+        if let Some(EntityType::Line(line)) = staged.get_entity_mut(h1) {
             line.start = Vector3::new(far1.x, far1.y, line.start.z);
             line.end = Vector3::new(t1.x, t1.y, line.end.z);
         }
-        if let Some(EntityType::Line(line)) = self.cad.get_entity_mut(h2) {
+        if let Some(EntityType::Line(line)) = staged.get_entity_mut(h2) {
             line.start = Vector3::new(far2.x, far2.y, line.start.z);
             line.end = Vector3::new(t2.x, t2.y, line.end.z);
         }
@@ -805,8 +1091,11 @@ impl DrawingDocument {
             end_angle,
         );
         arc.common.layer = l1.common.layer.clone();
-        let arc_h = self.cad.add_entity(EntityType::Arc(arc)).map_err(|e| e.to_string())?;
-        self.advance_state();
+        let arc_h = staged
+            .add_entity(EntityType::Arc(arc))
+            .map_err(|e| e.to_string())?;
+        ensure_entities_geometry_valid(&staged, &[h1, h2, arc_h], "FILLET")?;
+        self.commit_staged_change(staged)?;
         Ok((h1, h2, Some(arc_h)))
     }
 
@@ -823,8 +1112,16 @@ impl DrawingDocument {
         if h1 == h2 {
             return Err("CHAMFER requires two different lines".to_owned());
         }
-        let e1 = self.cad.get_entity(h1).cloned().ok_or("First line no longer exists")?;
-        let e2 = self.cad.get_entity(h2).cloned().ok_or("Second line no longer exists")?;
+        let e1 = self
+            .cad
+            .get_entity(h1)
+            .cloned()
+            .ok_or("First line no longer exists")?;
+        let e2 = self
+            .cad
+            .get_entity(h2)
+            .cloned()
+            .ok_or("Second line no longer exists")?;
         let (l1, l2) = match (&e1, &e2) {
             (EntityType::Line(l1), EntityType::Line(l2)) => (l1, l2),
             _ => return Err("CHAMFER currently supports two LINE entities".to_owned()),
@@ -859,20 +1156,23 @@ impl DrawingDocument {
         let b1 = Vector2::new(inter.x + d1 * u1.x, inter.y + d1 * u1.y);
         let b2 = Vector2::new(inter.x + d2 * u2.x, inter.y + d2 * u2.y);
 
-        self.begin_change();
-        if let Some(EntityType::Line(line)) = self.cad.get_entity_mut(h1) {
+        let mut staged = self.cad.clone();
+        if let Some(EntityType::Line(line)) = staged.get_entity_mut(h1) {
             line.start = Vector3::new(far1.x, far1.y, line.start.z);
             line.end = Vector3::new(b1.x, b1.y, line.end.z);
         }
-        if let Some(EntityType::Line(line)) = self.cad.get_entity_mut(h2) {
+        if let Some(EntityType::Line(line)) = staged.get_entity_mut(h2) {
             line.start = Vector3::new(far2.x, far2.y, line.start.z);
             line.end = Vector3::new(b2.x, b2.y, line.end.z);
         }
 
         let mut chamfer_line = Line::from_coords(b1.x, b1.y, 0.0, b2.x, b2.y, 0.0);
         chamfer_line.common.layer = l1.common.layer.clone();
-        let chamfer_h = self.cad.add_entity(EntityType::Line(chamfer_line)).map_err(|e| e.to_string())?;
-        self.advance_state();
+        let chamfer_h = staged
+            .add_entity(EntityType::Line(chamfer_line))
+            .map_err(|e| e.to_string())?;
+        ensure_entities_geometry_valid(&staged, &[h1, h2, chamfer_h], "CHAMFER")?;
+        self.commit_staged_change(staged)?;
         Ok((h1, h2, chamfer_h))
     }
 
@@ -883,7 +1183,11 @@ impl DrawingDocument {
         click_y: f64,
         cutter_handles: &[Handle],
     ) -> Result<Vec<Handle>, String> {
-        let entity = self.cad.get_entity(target_handle).cloned().ok_or("Target line no longer exists")?;
+        let entity = self
+            .cad
+            .get_entity(target_handle)
+            .cloned()
+            .ok_or("Target line no longer exists")?;
         let line = match entity {
             EntityType::Line(l) => l,
             _ => return Err("Only LINE entities can be trimmed currently".to_owned()),
@@ -892,8 +1196,10 @@ impl DrawingDocument {
 
         let p1 = Vector2::new(line.start.x, line.start.y);
         let p2 = Vector2::new(line.end.x, line.end.y);
-        let line_len = (p2.x - p1.x).hypot(p2.y - p1.y);
-        if line_len < 1e-9 {
+        let dx = p2.x - p1.x;
+        let dy = p2.y - p1.y;
+        let line_len = dx.hypot(dy);
+        if !line_len.is_finite() || line_len == 0.0 {
             return Err("Target line is degenerate".to_owned());
         }
 
@@ -902,21 +1208,40 @@ impl DrawingDocument {
         t_params.push(1.0);
 
         for &cutter_h in cutter_handles {
-            if cutter_h == target_handle { continue; }
+            if cutter_h == target_handle {
+                continue;
+            }
             if let Some(cutter) = self.cad.get_entity(cutter_h) {
                 match cutter {
                     EntityType::Line(cl) => {
                         let c1 = Vector2::new(cl.start.x, cl.start.y);
                         let c2 = Vector2::new(cl.end.x, cl.end.y);
-                        if let Some((_pt, t, u)) = line_line_intersection(p1, p2, c1, c2) {
-                            if t > 1e-6 && t < 1.0 - 1e-6 && u >= -1e-6 && u <= 1.0 + 1e-6 {
-                                t_params.push(t);
-                            }
+                        if let Some((_pt, t, u)) = line_line_intersection(p1, p2, c1, c2)
+                            && t > 1e-6
+                            && t < 1.0 - 1e-6
+                            && (-1e-6..=1.0 + 1e-6).contains(&u)
+                        {
+                            t_params.push(t);
                         }
                     }
                     EntityType::Circle(cc) => {
                         let center = Vector2::new(cc.center.x, cc.center.y);
                         for (_pt, t) in line_circle_intersections(p1, p2, center, cc.radius) {
+                            if t > 1e-6 && t < 1.0 - 1e-6 {
+                                t_params.push(t);
+                            }
+                        }
+                    }
+                    EntityType::Arc(arc) => {
+                        let center = Vector2::new(arc.center.x, arc.center.y);
+                        for (_pt, t) in line_arc_intersections(
+                            p1,
+                            p2,
+                            center,
+                            arc.radius,
+                            arc.start_angle,
+                            arc.end_angle,
+                        ) {
                             if t > 1e-6 && t < 1.0 - 1e-6 {
                                 t_params.push(t);
                             }
@@ -935,9 +1260,20 @@ impl DrawingDocument {
         }
 
         let click = Vector2::new(click_x, click_y);
-        let dx = p2.x - p1.x;
-        let dy = p2.y - p1.y;
-        let click_t = (((click.x - p1.x) * dx + (click.y - p1.y) * dy) / (line_len * line_len)).clamp(0.0, 1.0);
+        let click_offset = Vector2::new(click.x - p1.x, click.y - p1.y);
+        if !click.x.is_finite()
+            || !click.y.is_finite()
+            || !click_offset.x.is_finite()
+            || !click_offset.y.is_finite()
+        {
+            return Err("Trim pick point must be finite".to_owned());
+        }
+        let direction = Vector2::new(dx / line_len, dy / line_len);
+        let click_t = ((click_offset.x * direction.x + click_offset.y * direction.y) / line_len)
+            .clamp(0.0, 1.0);
+        if !click_t.is_finite() {
+            return Err("Trim pick point is outside numeric limits".to_owned());
+        }
 
         let mut trim_idx = 0;
         for i in 0..t_params.len() - 1 {
@@ -947,7 +1283,7 @@ impl DrawingDocument {
             }
         }
 
-        self.begin_change();
+        let mut staged = self.cad.clone();
         let mut remaining_handles = Vec::new();
         let layer = line.common.layer.clone();
 
@@ -961,7 +1297,9 @@ impl DrawingDocument {
                 let ey = p1.y + t_end * dy;
                 let mut nl = Line::from_coords(sx, sy, 0.0, ex, ey, 0.0);
                 nl.common.layer = layer.clone();
-                let nh = self.cad.add_entity(EntityType::Line(nl)).map_err(|e| e.to_string())?;
+                let nh = staged
+                    .add_entity(EntityType::Line(nl))
+                    .map_err(|e| e.to_string())?;
                 remaining_handles.push(nh);
             }
         }
@@ -975,13 +1313,18 @@ impl DrawingDocument {
                 let ey = p1.y + t_end * dy;
                 let mut nl = Line::from_coords(sx, sy, 0.0, ex, ey, 0.0);
                 nl.common.layer = layer.clone();
-                let nh = self.cad.add_entity(EntityType::Line(nl)).map_err(|e| e.to_string())?;
+                let nh = staged
+                    .add_entity(EntityType::Line(nl))
+                    .map_err(|e| e.to_string())?;
                 remaining_handles.push(nh);
             }
         }
 
-        self.cad.remove_entity(target_handle).expect("validated target line");
-        self.advance_state();
+        staged
+            .remove_entity(target_handle)
+            .expect("validated target line");
+        ensure_entities_geometry_valid(&staged, &remaining_handles, "TRIM")?;
+        self.commit_staged_change(staged)?;
         Ok(remaining_handles)
     }
 
@@ -992,7 +1335,11 @@ impl DrawingDocument {
         click_y: f64,
         boundary_handles: &[Handle],
     ) -> Result<(), String> {
-        let entity = self.cad.get_entity(target_handle).cloned().ok_or("Target line no longer exists")?;
+        let entity = self
+            .cad
+            .get_entity(target_handle)
+            .cloned()
+            .ok_or("Target line no longer exists")?;
         let line = match entity {
             EntityType::Line(l) => l,
             _ => return Err("Only LINE entities can be extended currently".to_owned()),
@@ -1009,22 +1356,42 @@ impl DrawingDocument {
         let mut best_t: Option<f64> = None;
 
         for &bh in boundary_handles {
-            if bh == target_handle { continue; }
-            if let Some(b_ent) = self.cad.get_entity(bh) {
-                match b_ent {
-                    EntityType::Line(bl) => {
-                        let b1 = Vector2::new(bl.start.x, bl.start.y);
-                        let b2 = Vector2::new(bl.end.x, bl.end.y);
-                        if let Some((_pt, t, u)) = line_line_intersection(p1, p2, b1, b2) {
-                            if u >= -1e-6 && u <= 1.0 + 1e-6 {
-                                if extend_end && t > 1.0 + 1e-6 {
-                                    if best_t.map_or(true, |bt| t < bt) {
-                                        best_t = Some(t);
-                                    }
-                                } else if !extend_end && t < -1e-6 {
-                                    if best_t.map_or(true, |bt| t > bt) {
-                                        best_t = Some(t);
-                                    }
+            if bh == target_handle {
+                continue;
+            }
+            if let Some(boundary) = self.cad.get_entity(bh) {
+                match boundary {
+                    EntityType::Line(boundary) => {
+                        let b1 = Vector2::new(boundary.start.x, boundary.start.y);
+                        let b2 = Vector2::new(boundary.end.x, boundary.end.y);
+                        if let Some((_pt, t, u)) = line_line_intersection(p1, p2, b1, b2)
+                            && (-1e-6..=1.0 + 1e-6).contains(&u)
+                            && ((extend_end && t > 1.0 + 1e-6) || (!extend_end && t < -1e-6))
+                        {
+                            let improves_candidate = best_t
+                                .is_none_or(|best| if extend_end { t < best } else { t > best });
+                            if improves_candidate {
+                                best_t = Some(t);
+                            }
+                        }
+                    }
+                    EntityType::Arc(arc) => {
+                        let center = Vector2::new(arc.center.x, arc.center.y);
+                        for (_point, t) in line_arc_intersections(
+                            p1,
+                            p2,
+                            center,
+                            arc.radius,
+                            arc.start_angle,
+                            arc.end_angle,
+                        ) {
+                            if (extend_end && t > 1.0 + 1e-6) || (!extend_end && t < -1e-6) {
+                                let improves_candidate =
+                                    best_t.is_none_or(
+                                        |best| if extend_end { t < best } else { t > best },
+                                    );
+                                if improves_candidate {
+                                    best_t = Some(t);
                                 }
                             }
                         }
@@ -1038,16 +1405,20 @@ impl DrawingDocument {
         let dx = p2.x - p1.x;
         let dy = p2.y - p1.y;
         let new_pt = Vector2::new(p1.x + target_t * dx, p1.y + target_t * dy);
+        if !finite2(new_pt) {
+            return Err("EXTEND would produce non-finite coordinates".to_owned());
+        }
 
-        self.begin_change();
-        if let Some(EntityType::Line(l)) = self.cad.get_entity_mut(target_handle) {
+        let mut staged = self.cad.clone();
+        if let Some(EntityType::Line(l)) = staged.get_entity_mut(target_handle) {
             if extend_end {
                 l.end = Vector3::new(new_pt.x, new_pt.y, l.end.z);
             } else {
                 l.start = Vector3::new(new_pt.x, new_pt.y, l.start.z);
             }
         }
-        self.advance_state();
+        ensure_entities_geometry_valid(&staged, &[target_handle], "EXTEND")?;
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -1072,26 +1443,35 @@ impl DrawingDocument {
         if !matches!(self.cad.get_entity(handle), Some(EntityType::LwPolyline(_))) {
             return Err("Selected entity is not a lightweight Polyline".to_owned());
         }
-        if let Some(EntityType::LwPolyline(poly)) = self.cad.get_entity(handle) {
-            if poly.is_closed == closed
-                && poly.vertices.len() == vertices.len()
-                && poly.vertices.iter().zip(vertices).all(|(a, b)| {
-                    a.location == b.location
-                        && a.bulge == b.bulge
-                        && a.start_width == b.start_width
-                        && a.end_width == b.end_width
-                })
-            {
-                return Ok(());
-            }
+        if let Some(EntityType::LwPolyline(poly)) = self.cad.get_entity(handle)
+            && poly.is_closed == closed
+            && poly.vertices.len() == vertices.len()
+            && poly
+                .vertices
+                .iter()
+                .zip(vertices)
+                .all(|(a, b)| a.location == b.location && a.bulge == b.bulge)
+        {
+            return Ok(());
         }
         self.ensure_entity_layer_editable(handle)?;
-        self.begin_change();
-        if let Some(EntityType::LwPolyline(poly)) = self.cad.get_entity_mut(handle) {
-            poly.vertices = vertices.to_vec();
+        let mut staged = self.cad.clone();
+        if let Some(EntityType::LwPolyline(poly)) = staged.get_entity_mut(handle) {
+            let mut updated_vertices = vertices.to_vec();
+            for (index, updated) in updated_vertices.iter_mut().enumerate() {
+                if let Some(previous) = poly.vertices.get(index) {
+                    // Grip/property edits change vertex geometry only. Preserve
+                    // DXF/DWG per-vertex metadata that is not editable here.
+                    updated.start_width = previous.start_width;
+                    updated.end_width = previous.end_width;
+                    updated.vertex_id = previous.vertex_id;
+                }
+            }
+            poly.vertices = updated_vertices;
             poly.is_closed = closed;
         }
-        self.advance_state();
+        ensure_entities_geometry_valid(&staged, &[handle], "POLYLINE edit")?;
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -1100,7 +1480,6 @@ impl DrawingDocument {
             return Err("LINE requires two distinct finite points".to_owned());
         }
         self.ensure_current_layer_editable()?;
-        self.begin_change();
         let line = Line::from_coords(start.x, start.y, 0.0, end.x, end.y, 0.0);
         let mut line = line;
         line.common.layer = self.cad.header.current_layer_name.clone();
@@ -1132,7 +1511,6 @@ impl DrawingDocument {
             );
         }
         self.ensure_current_layer_editable()?;
-        self.begin_change();
         let mut arc = Arc::from_center_radius_angles(
             Vector3::new(center.x, center.y, 0.0),
             radius,
@@ -1161,7 +1539,6 @@ impl DrawingDocument {
         }
         validate_polyline_vertices(vertices, closed)?;
         self.ensure_current_layer_editable()?;
-        self.begin_change();
         let mut polyline = LwPolyline::new();
         polyline.vertices = vertices.to_vec();
         polyline.is_closed = closed;
@@ -1186,13 +1563,16 @@ impl DrawingDocument {
                 return Err("Move would produce non-finite entity coordinates".to_owned());
             }
         }
-        self.begin_change();
+        let mut staged = self.cad.clone();
         for handle in &handles {
-            if let Some(entity) = self.cad.get_entity_mut(*handle) {
+            if let Some(entity) = staged.get_entity_mut(*handle) {
                 entity.as_entity_mut().translate(Vector3::new(dx, dy, 0.0));
+                if !entity_geometry_is_valid(entity) {
+                    return Err("Move would produce invalid entity geometry".to_owned());
+                }
             }
         }
-        self.advance_state();
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -1207,13 +1587,13 @@ impl DrawingDocument {
             }
             self.ensure_entity_layer_editable(*handle)?;
         }
-        self.begin_change();
+        let mut staged = self.cad.clone();
         for handle in &handles {
-            self.cad
+            staged
                 .remove_entity(*handle)
                 .expect("all unique erase handles were validated before commit");
         }
-        self.advance_state();
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -1238,20 +1618,28 @@ impl DrawingDocument {
                 return Err("Copy would produce non-finite entity coordinates".to_owned());
             }
         }
-        self.begin_change();
+        let mut staged = self.cad.clone();
         let mut new_handles = Vec::with_capacity(handles.len());
         for handle in &handles {
-            if let Some(entity) = self.cad.get_entity(*handle) {
+            if let Some(entity) = staged.get_entity(*handle) {
                 let mut cloned = entity.clone();
+                // A copied CAD entity is a new database object, so it must not
+                // retain the source object's drawing handle.
+                cloned.common_mut().handle = Handle::NULL;
                 cloned.as_entity_mut().translate(Vector3::new(dx, dy, 0.0));
-                let new_handle = self
-                    .cad
+                if !entity_geometry_is_valid(&cloned) {
+                    return Err("Copy would produce invalid entity geometry".to_owned());
+                }
+                let new_handle = staged
                     .add_entity(cloned)
                     .map_err(|error| error.to_string())?;
+                if self.cad.get_entity(new_handle).is_some() || new_handles.contains(&new_handle) {
+                    return Err("COPY could not allocate a unique entity handle".to_owned());
+                }
                 new_handles.push(new_handle);
             }
         }
-        self.advance_state();
+        self.commit_staged_change(staged)?;
         Ok(new_handles)
     }
 
@@ -1278,18 +1666,33 @@ impl DrawingDocument {
         let center = Vector2::new(cx, cy);
         let cos_a = angle_rad.cos();
         let sin_a = angle_rad.sin();
-        self.begin_change();
+        let mut staged = self.cad.clone();
         for handle in &handles {
-            if let Some(entity) = self.cad.get_entity_mut(*handle) {
+            if let Some(entity) = staged.get_entity_mut(*handle) {
                 match entity {
                     EntityType::Line(line) => {
-                        let s = rotate_vector2(Vector2::new(line.start.x, line.start.y), center, cos_a, sin_a);
-                        let e = rotate_vector2(Vector2::new(line.end.x, line.end.y), center, cos_a, sin_a);
+                        let s = rotate_vector2(
+                            Vector2::new(line.start.x, line.start.y),
+                            center,
+                            cos_a,
+                            sin_a,
+                        );
+                        let e = rotate_vector2(
+                            Vector2::new(line.end.x, line.end.y),
+                            center,
+                            cos_a,
+                            sin_a,
+                        );
                         line.start = Vector3::new(s.x, s.y, line.start.z);
                         line.end = Vector3::new(e.x, e.y, line.end.z);
                     }
                     EntityType::Arc(arc) => {
-                        let c = rotate_vector2(Vector2::new(arc.center.x, arc.center.y), center, cos_a, sin_a);
+                        let c = rotate_vector2(
+                            Vector2::new(arc.center.x, arc.center.y),
+                            center,
+                            cos_a,
+                            sin_a,
+                        );
                         arc.center = Vector3::new(c.x, c.y, arc.center.z);
                         arc.start_angle = positive_angle(arc.start_angle + angle_rad);
                         arc.end_angle = positive_angle(arc.end_angle + angle_rad);
@@ -1300,16 +1703,31 @@ impl DrawingDocument {
                         }
                     }
                     EntityType::Circle(circle) => {
-                        let c = rotate_vector2(Vector2::new(circle.center.x, circle.center.y), center, cos_a, sin_a);
+                        let c = rotate_vector2(
+                            Vector2::new(circle.center.x, circle.center.y),
+                            center,
+                            cos_a,
+                            sin_a,
+                        );
                         circle.center = Vector3::new(c.x, c.y, circle.center.z);
                     }
                     EntityType::Text(text) => {
-                        let p = rotate_vector2(Vector2::new(text.insertion_point.x, text.insertion_point.y), center, cos_a, sin_a);
+                        let p = rotate_vector2(
+                            Vector2::new(text.insertion_point.x, text.insertion_point.y),
+                            center,
+                            cos_a,
+                            sin_a,
+                        );
                         text.insertion_point = Vector3::new(p.x, p.y, text.insertion_point.z);
                         text.rotation = positive_angle(text.rotation + angle_rad);
                     }
                     EntityType::Insert(insert) => {
-                        let p = rotate_vector2(Vector2::new(insert.insert_point.x, insert.insert_point.y), center, cos_a, sin_a);
+                        let p = rotate_vector2(
+                            Vector2::new(insert.insert_point.x, insert.insert_point.y),
+                            center,
+                            cos_a,
+                            sin_a,
+                        );
                         insert.insert_point = Vector3::new(p.x, p.y, insert.insert_point.z);
                         insert.rotation = positive_angle(insert.rotation + angle_rad);
                     }
@@ -1317,7 +1735,14 @@ impl DrawingDocument {
                 }
             }
         }
-        self.advance_state();
+        if handles.iter().any(|handle| {
+            staged
+                .get_entity(*handle)
+                .is_some_and(|entity| !entity_geometry_is_valid(entity))
+        }) {
+            return Err("ROTATE would produce non-finite entity geometry".to_owned());
+        }
+        self.commit_staged_change(staged)?;
         Ok(())
     }
 
@@ -1350,10 +1775,10 @@ impl DrawingDocument {
                 self.ensure_entity_layer_editable(*handle)?;
             }
         }
-        self.begin_change();
+        let mut staged = self.cad.clone();
         let mut new_handles = Vec::new();
         for handle in &handles {
-            if let Some(entity) = self.cad.get_entity(*handle) {
+            if let Some(entity) = staged.get_entity(*handle) {
                 let mut mirrored = entity.clone();
                 match &mut mirrored {
                     EntityType::Line(line) => {
@@ -1366,9 +1791,8 @@ impl DrawingDocument {
                         let c = mirror_vector2(Vector2::new(arc.center.x, arc.center.y), p1, p2);
                         arc.center = Vector3::new(c.x, c.y, arc.center.z);
                         let mirror_axis_angle = (p2.y - p1.y).atan2(p2.x - p1.x);
-                        let reflect_angle = |a: f64| -> f64 {
-                            positive_angle(2.0 * mirror_axis_angle - a)
-                        };
+                        let reflect_angle =
+                            |a: f64| -> f64 { positive_angle(2.0 * mirror_axis_angle - a) };
                         let new_start = reflect_angle(arc.end_angle);
                         let new_end = reflect_angle(arc.start_angle);
                         arc.start_angle = new_start;
@@ -1381,35 +1805,52 @@ impl DrawingDocument {
                         }
                     }
                     EntityType::Circle(circle) => {
-                        let c = mirror_vector2(Vector2::new(circle.center.x, circle.center.y), p1, p2);
+                        let c =
+                            mirror_vector2(Vector2::new(circle.center.x, circle.center.y), p1, p2);
                         circle.center = Vector3::new(c.x, c.y, circle.center.z);
                     }
                     EntityType::Text(text) => {
-                        let p = mirror_vector2(Vector2::new(text.insertion_point.x, text.insertion_point.y), p1, p2);
+                        let p = mirror_vector2(
+                            Vector2::new(text.insertion_point.x, text.insertion_point.y),
+                            p1,
+                            p2,
+                        );
                         text.insertion_point = Vector3::new(p.x, p.y, text.insertion_point.z);
                         let mirror_axis = (p2.y - p1.y).atan2(p2.x - p1.x);
                         text.rotation = positive_angle(2.0 * mirror_axis - text.rotation);
                     }
                     EntityType::Insert(insert) => {
-                        let p = mirror_vector2(Vector2::new(insert.insert_point.x, insert.insert_point.y), p1, p2);
+                        let p = mirror_vector2(
+                            Vector2::new(insert.insert_point.x, insert.insert_point.y),
+                            p1,
+                            p2,
+                        );
                         insert.insert_point = Vector3::new(p.x, p.y, insert.insert_point.z);
                         let mirror_axis = (p2.y - p1.y).atan2(p2.x - p1.x);
                         insert.rotation = positive_angle(2.0 * mirror_axis - insert.rotation);
                     }
                     _ => {}
                 }
+                if !entity_geometry_is_valid(&mirrored) {
+                    return Err("MIRROR would produce non-finite entity geometry".to_owned());
+                }
                 if keep_source {
-                    let nh = self.cad.add_entity(mirrored).map_err(|e| e.to_string())?;
+                    // Keep-source mirror creates a new database object.
+                    mirrored.common_mut().handle = Handle::NULL;
+                    let nh = staged.add_entity(mirrored).map_err(|e| e.to_string())?;
+                    if self.cad.get_entity(nh).is_some() || new_handles.contains(&nh) {
+                        return Err("MIRROR could not allocate a unique entity handle".to_owned());
+                    }
                     new_handles.push(nh);
                 } else {
-                    if let Some(target) = self.cad.get_entity_mut(*handle) {
+                    if let Some(target) = staged.get_entity_mut(*handle) {
                         *target = mirrored;
                     }
                     new_handles.push(*handle);
                 }
             }
         }
-        self.advance_state();
+        self.commit_staged_change(staged)?;
         Ok(new_handles)
     }
 
@@ -1419,8 +1860,13 @@ impl DrawingDocument {
             .get_entity(handle)
             .ok_or_else(|| "Selected entity no longer exists".to_owned())?;
 
-        let (vertices, closed, layer) = match entity {
-            EntityType::LwPolyline(poly) => (poly.vertices.clone(), poly.is_closed, poly.common.layer.clone()),
+        let (vertices, closed, layer, elevation) = match entity {
+            EntityType::LwPolyline(poly) => (
+                poly.vertices.clone(),
+                poly.is_closed,
+                poly.common.layer.clone(),
+                poly.elevation,
+            ),
             _ => return Err("Only Polyline entities can be exploded".to_owned()),
         };
 
@@ -1429,47 +1875,65 @@ impl DrawingDocument {
         }
 
         self.ensure_entity_layer_editable(handle)?;
-        self.begin_change();
+        let mut staged = self.cad.clone();
 
         let mut new_handles = Vec::new();
-        let n = if closed { vertices.len() } else { vertices.len() - 1 };
+        let n = if closed {
+            vertices.len()
+        } else {
+            vertices.len() - 1
+        };
 
         for i in 0..n {
             let v1 = &vertices[i];
             let v2 = &vertices[(i + 1) % vertices.len()];
 
-            if v1.bulge.abs() < 1e-6 {
-                let mut line = Line::from_coords(v1.location.x, v1.location.y, 0.0, v2.location.x, v2.location.y, 0.0);
+            if v1.bulge.abs() < 1e-10 {
+                let mut line = Line::from_coords(
+                    v1.location.x,
+                    v1.location.y,
+                    elevation,
+                    v2.location.x,
+                    v2.location.y,
+                    elevation,
+                );
                 line.common.layer = layer.clone();
-                let nh = self.cad.add_entity(EntityType::Line(line)).map_err(|e| e.to_string())?;
+                let nh = staged
+                    .add_entity(EntityType::Line(line))
+                    .map_err(|e| e.to_string())?;
                 new_handles.push(nh);
             } else {
-                let dx = v2.location.x - v1.location.x;
-                let dy = v2.location.y - v1.location.y;
-                let chord = dx.hypot(dy);
-                if chord > 1e-10 {
-                    let sweep = 4.0 * v1.bulge.atan();
-                    let radius = chord / (2.0 * (sweep.abs() / 2.0).sin());
-                    let offset = chord / (2.0 * (sweep / 2.0).tan());
-                    let cx = (v1.location.x + v2.location.x) * 0.5 - dy / chord * offset;
-                    let cy = (v1.location.y + v2.location.y) * 0.5 + dx / chord * offset;
-                    let start_angle = (v1.location.y - cy).atan2(v1.location.x - cx);
-                    let end_angle = (v2.location.y - cy).atan2(v2.location.x - cx);
-                    let (s, e) = if v1.bulge > 0.0 {
-                        (positive_angle(start_angle), positive_angle(end_angle))
-                    } else {
-                        (positive_angle(end_angle), positive_angle(start_angle))
-                    };
-                    let mut arc = Arc::from_center_radius_angles(Vector3::new(cx, cy, 0.0), radius, s, e);
-                    arc.common.layer = layer.clone();
-                    let nh = self.cad.add_entity(EntityType::Arc(arc)).map_err(|e| e.to_string())?;
-                    new_handles.push(nh);
-                }
+                let (center, radius, start, sweep) = bulge_geometry(
+                    Point2::new(v1.location.x, v1.location.y),
+                    Point2::new(v2.location.x, v2.location.y),
+                    v1.bulge,
+                )
+                .ok_or_else(|| "EXPLODE cannot resolve a bulge segment".to_owned())?;
+                let end = start + sweep;
+                let (s, e) = if sweep > 0.0 {
+                    (positive_angle(start), positive_angle(end))
+                } else {
+                    (positive_angle(end), positive_angle(start))
+                };
+                let mut arc = Arc::from_center_radius_angles(
+                    Vector3::new(center.x, center.y, elevation),
+                    radius,
+                    s,
+                    e,
+                );
+                arc.common.layer = layer.clone();
+                let nh = staged
+                    .add_entity(EntityType::Arc(arc))
+                    .map_err(|e| e.to_string())?;
+                new_handles.push(nh);
             }
         }
 
-        self.cad.remove_entity(handle).expect("polyline handle validated");
-        self.advance_state();
+        ensure_entities_geometry_valid(&staged, &new_handles, "EXPLODE")?;
+        staged
+            .remove_entity(handle)
+            .expect("polyline handle validated");
+        self.commit_staged_change(staged)?;
         Ok(new_handles)
     }
 
@@ -1487,9 +1951,10 @@ impl DrawingDocument {
             .get_entity(handle)
             .cloned()
             .ok_or_else(|| "Selected entity no longer exists".to_owned())?;
+        self.ensure_entity_layer_editable(handle)?;
 
         let layer = entity.common().layer.clone();
-        self.begin_change();
+        let mut staged = self.cad.clone();
 
         match entity {
             EntityType::Circle(circle) => {
@@ -1505,9 +1970,12 @@ impl DrawingDocument {
                 }
                 let mut new_c = Circle::from_coords(center.x, center.y, 0.0, new_radius);
                 new_c.common.layer = layer;
-                let nh = self.cad.add_entity(EntityType::Circle(new_c)).map_err(|e| e.to_string())?;
-                self.advance_state();
-                return Ok(nh);
+                let nh = staged
+                    .add_entity(EntityType::Circle(new_c))
+                    .map_err(|e| e.to_string())?;
+                ensure_entities_geometry_valid(&staged, &[nh], "OFFSET")?;
+                self.commit_staged_change(staged)?;
+                Ok(nh)
             }
             EntityType::Line(line) => {
                 let dx = line.end.x - line.start.x;
@@ -1520,7 +1988,11 @@ impl DrawingDocument {
                 let mut ny = dx / len;
                 let to_side_x = side_point.x - line.start.x;
                 let to_side_y = side_point.y - line.start.y;
-                if to_side_x * nx + to_side_y * ny < 0.0 {
+                let side_projection = to_side_x * nx + to_side_y * ny;
+                if !side_projection.is_finite() {
+                    return Err("OFFSET side selection exceeds numeric limits".to_owned());
+                }
+                if side_projection < 0.0 {
                     nx = -nx;
                     ny = -ny;
                 }
@@ -1533,8 +2005,11 @@ impl DrawingDocument {
                     line.end.z,
                 );
                 new_line.common.layer = layer;
-                let nh = self.cad.add_entity(EntityType::Line(new_line)).map_err(|e| e.to_string())?;
-                self.advance_state();
+                let nh = staged
+                    .add_entity(EntityType::Line(new_line))
+                    .map_err(|e| e.to_string())?;
+                ensure_entities_geometry_valid(&staged, &[nh], "OFFSET")?;
+                self.commit_staged_change(staged)?;
                 Ok(nh)
             }
             EntityType::Arc(arc) => {
@@ -1547,10 +2022,18 @@ impl DrawingDocument {
                     }
                     arc.radius - distance
                 };
-                let mut new_arc = Arc::from_center_radius_angles(arc.center, new_radius, arc.start_angle, arc.end_angle);
+                let mut new_arc = Arc::from_center_radius_angles(
+                    arc.center,
+                    new_radius,
+                    arc.start_angle,
+                    arc.end_angle,
+                );
                 new_arc.common.layer = layer;
-                let nh = self.cad.add_entity(EntityType::Arc(new_arc)).map_err(|e| e.to_string())?;
-                self.advance_state();
+                let nh = staged
+                    .add_entity(EntityType::Arc(new_arc))
+                    .map_err(|e| e.to_string())?;
+                ensure_entities_geometry_valid(&staged, &[nh], "OFFSET")?;
+                self.commit_staged_change(staged)?;
                 Ok(nh)
             }
             _ => Err("Offset is currently supported for Line and Arc".to_owned()),
@@ -1586,12 +2069,13 @@ impl DrawingDocument {
     }
 
     pub fn save(&mut self, path: impl AsRef<Path>) -> Result<PathBuf, String> {
+        self.validate_invariants()?;
         let path = path.as_ref().to_path_buf();
         let target_format = DrawingFormat::from_path(&path)?;
-        if let Some(source_format) = self.source_format {
-            if source_format != target_format {
-                return Err("Save As to another CAD format is disabled until conversion-loss reporting is available".to_owned());
-            }
+        if let Some(source_format) = self.source_format
+            && source_format != target_format
+        {
+            return Err("Save As to another CAD format is disabled until conversion-loss reporting is available".to_owned());
         }
         let unpreservable = self.unpreservable_unknown_count(target_format);
         if unpreservable > 0 {
@@ -1607,12 +2091,22 @@ impl DrawingDocument {
     }
 
     fn add_entity(&mut self, entity: EntityType) -> Result<Handle, String> {
-        let handle = self
-            .cad
+        if !entity_geometry_is_valid(&entity) {
+            return Err("Entity geometry is invalid or outside numeric limits".to_owned());
+        }
+        let mut staged = self.cad.clone();
+        let handle = staged
             .add_entity(entity)
             .map_err(|error| error.to_string())?;
-        self.advance_state();
+        self.commit_staged_change(staged)?;
         Ok(handle)
+    }
+
+    fn commit_staged_change(&mut self, staged: CadFile) -> Result<(), String> {
+        self.begin_change();
+        self.cad = staged;
+        self.advance_state();
+        Ok(())
     }
 
     fn begin_change(&mut self) {
@@ -1638,12 +2132,12 @@ impl DrawingDocument {
             .ok_or("Selected entity no longer exists")?
             .common()
             .layer;
-        if let Some(layer) = self.cad.layers.get(layer_name) {
-            if layer.flags.locked || layer.flags.frozen || layer.flags.off {
-                return Err(format!(
-                    "Entity is on a locked, frozen, or off layer: {layer_name}"
-                ));
-            }
+        if let Some(layer) = self.cad.layers.get(layer_name)
+            && (layer.flags.locked || layer.flags.frozen || layer.flags.off)
+        {
+            return Err(format!(
+                "Entity is on a locked, frozen, or off layer: {layer_name}"
+            ));
         }
         Ok(())
     }
@@ -1666,7 +2160,81 @@ fn finite2(p: Vector2) -> bool {
     p.x.is_finite() && p.y.is_finite()
 }
 
+fn validate_cad_identity(cad: &CadFile) -> Result<(), String> {
+    let mut handles = HashSet::new();
+    let mut layer_names = HashSet::new();
+
+    for layer in cad.layers.iter() {
+        if layer.handle.is_null() {
+            return Err(format!("Layer '{}' has a null CAD handle", layer.name));
+        }
+        if !handles.insert(layer.handle) {
+            return Err(format!(
+                "CAD handle {} is used by more than one table/entity",
+                layer.handle
+            ));
+        }
+        if !layer_names.insert(layer.name.to_uppercase()) {
+            return Err(format!("Layer name '{}' is duplicated", layer.name));
+        }
+    }
+
+    let current_layer = cad
+        .layers
+        .get(&cad.header.current_layer_name)
+        .ok_or_else(|| {
+            format!(
+                "Current layer '{}' is missing from the layer table",
+                cad.header.current_layer_name
+            )
+        })?;
+    if current_layer.handle != cad.header.current_layer_handle {
+        return Err("Current layer name and handle refer to different layers".to_owned());
+    }
+
+    for entity in cad.entities() {
+        let common = entity.common();
+        if common.handle.is_null() {
+            return Err("An entity has a null CAD handle".to_owned());
+        }
+        if !handles.insert(common.handle) {
+            return Err(format!(
+                "CAD handle {} is used by more than one table/entity",
+                common.handle
+            ));
+        }
+        if cad.layers.get(&common.layer).is_none() {
+            return Err(format!(
+                "Entity {} references missing layer '{}'",
+                common.handle, common.layer
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_entities_geometry_valid(
+    cad: &CadFile,
+    handles: &[Handle],
+    operation: &str,
+) -> Result<(), String> {
+    for handle in handles {
+        let entity = cad
+            .get_entity(*handle)
+            .ok_or_else(|| format!("{operation} lost a staged entity"))?;
+        if !entity_geometry_is_valid(entity) {
+            return Err(format!(
+                "{operation} would produce invalid or out-of-range entity geometry"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_polyline_vertices(vertices: &[LwVertex], closed: bool) -> Result<(), String> {
+    if vertices.len() < if closed { 3 } else { 2 } {
+        return Err("Polyline does not have enough vertices".to_owned());
+    }
     if vertices
         .windows(2)
         .any(|pair| pair[0].location == pair[1].location)
@@ -1701,6 +2269,9 @@ fn validate_polyline_vertices(vertices: &[LwVertex], closed: bool) -> Result<(),
             }
         }
     }
+    if polyline_metrics(vertices, closed).is_none() {
+        return Err("Polyline metrics exceed numeric limits".to_owned());
+    }
     Ok(())
 }
 
@@ -1724,10 +2295,122 @@ fn entity_translation_is_finite(entity: &EntityType, dx: f64, dy: f64) -> bool {
                 && finite(arc.center.x + arc.radius, arc.center.y + arc.radius)
                 && finite(arc.center.x - arc.radius, arc.center.y - arc.radius)
         }
-        EntityType::LwPolyline(polyline) => polyline
-            .vertices
-            .iter()
-            .all(|vertex| finite(vertex.location.x, vertex.location.y)),
+        EntityType::Circle(circle) => {
+            finite(circle.center.x, circle.center.y)
+                && finite(
+                    circle.center.x + circle.radius,
+                    circle.center.y + circle.radius,
+                )
+                && finite(
+                    circle.center.x - circle.radius,
+                    circle.center.y - circle.radius,
+                )
+        }
+        EntityType::LwPolyline(polyline) => polyline.vertices.iter().all(|vertex| {
+            finite(vertex.location.x, vertex.location.y)
+                && vertex.bulge.is_finite()
+                && vertex.start_width.is_finite()
+                && vertex.end_width.is_finite()
+        }),
+        EntityType::Text(text) => finite(text.insertion_point.x, text.insertion_point.y),
+        EntityType::Insert(insert) => finite(insert.insert_point.x, insert.insert_point.y),
+        _ => true,
+    }
+}
+
+fn entity_geometry_is_valid(entity: &EntityType) -> bool {
+    match entity {
+        EntityType::Line(line) => {
+            [
+                line.start.x,
+                line.start.y,
+                line.start.z,
+                line.end.x,
+                line.end.y,
+                line.end.z,
+            ]
+            .into_iter()
+            .all(f64::is_finite)
+                && {
+                    let length = (line.end.x - line.start.x).hypot(line.end.y - line.start.y);
+                    length.is_finite() && length > 0.0
+                }
+        }
+        EntityType::Arc(arc) => {
+            [
+                arc.center.x,
+                arc.center.y,
+                arc.center.z,
+                arc.radius,
+                arc.start_angle,
+                arc.end_angle,
+            ]
+            .into_iter()
+            .all(f64::is_finite)
+                && arc.radius > 0.0
+                && positive_angle(arc.end_angle - arc.start_angle) > 0.0
+                && (arc.center.x + arc.radius).is_finite()
+                && (arc.center.x - arc.radius).is_finite()
+                && (arc.center.y + arc.radius).is_finite()
+                && (arc.center.y - arc.radius).is_finite()
+        }
+        EntityType::Circle(circle) => {
+            [
+                circle.center.x,
+                circle.center.y,
+                circle.center.z,
+                circle.radius,
+            ]
+            .into_iter()
+            .all(f64::is_finite)
+                && circle.radius > 0.0
+                && (circle.center.x + circle.radius).is_finite()
+                && (circle.center.x - circle.radius).is_finite()
+                && (circle.center.y + circle.radius).is_finite()
+                && (circle.center.y - circle.radius).is_finite()
+        }
+        EntityType::LwPolyline(polyline) => {
+            polyline.constant_width.is_finite()
+                && polyline.elevation.is_finite()
+                && polyline.thickness.is_finite()
+                && [polyline.normal.x, polyline.normal.y, polyline.normal.z]
+                    .into_iter()
+                    .all(f64::is_finite)
+                && polyline.vertices.len() >= if polyline.is_closed { 3 } else { 2 }
+                && polyline.vertices.iter().all(|vertex| {
+                    [
+                        vertex.location.x,
+                        vertex.location.y,
+                        vertex.bulge,
+                        vertex.start_width,
+                        vertex.end_width,
+                    ]
+                    .into_iter()
+                    .all(f64::is_finite)
+                })
+                && validate_polyline_vertices(&polyline.vertices, polyline.is_closed).is_ok()
+                && polyline_metrics(&polyline.vertices, polyline.is_closed).is_some()
+        }
+        EntityType::Text(text) => [
+            text.insertion_point.x,
+            text.insertion_point.y,
+            text.insertion_point.z,
+            text.height,
+            text.rotation,
+        ]
+        .into_iter()
+        .all(f64::is_finite),
+        EntityType::Insert(insert) => [
+            insert.insert_point.x,
+            insert.insert_point.y,
+            insert.insert_point.z,
+            insert.x_scale(),
+            insert.y_scale(),
+            insert.z_scale(),
+            insert.rotation,
+        ]
+        .into_iter()
+        .all(f64::is_finite),
         _ => true,
     }
 }
@@ -1784,11 +2467,36 @@ fn write_atomic(document: &CadFile, target: &Path, format: DrawingFormat) -> Res
         ));
     }
 
+    // DWG round-trip validation must catch document/table/object changes even
+    // when the writer preserves the number and types of entities. Keep the
+    // source untouched if the staged DWG cannot reproduce the semantic inventory.
+    if format == DrawingFormat::Dwg
+        && (!document.entities().eq(reopened.entities())
+            || !document.layers.iter().eq(reopened.layers.iter())
+            || document.objects != reopened.objects
+            || semantic_inventory_signature(document) != semantic_inventory_signature(&reopened))
+    {
+        let _ = fs::remove_file(&staging);
+        return Err(
+            "DWG save validation failed: semantic drawing data changed after write/reopen; original file was kept"
+                .to_owned(),
+        );
+    }
+
     if let Err(error) = replace_target(&staging, target, &backup) {
         let _ = fs::remove_file(&staging);
         return Err(format!("Could not atomically replace the drawing: {error}"));
     }
     Ok(())
+}
+
+fn semantic_inventory_signature(document: &CadFile) -> Vec<String> {
+    let mut components = Vec::new();
+    document
+        .semantic_inventory_v1()
+        .visit(|component| components.push(format!("{component:?}")));
+    components.sort_unstable();
+    components
 }
 
 #[cfg(windows)]
@@ -1888,7 +2596,6 @@ fn mirror_vector2(p: Vector2, p1: Vector2, p2: Vector2) -> Vector2 {
     Vector2::new(2.0 * proj_x - p.x, 2.0 * proj_y - p.y)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1896,10 +2603,14 @@ mod tests {
     #[test]
     fn test_create_entities_and_undo() {
         let mut doc = DrawingDocument::new();
-        let l_h = doc.add_line(Vector2::new(0.0, 0.0), Vector2::new(10.0, 0.0)).unwrap();
+        let l_h = doc
+            .add_line(Vector2::new(0.0, 0.0), Vector2::new(10.0, 0.0))
+            .unwrap();
         let a_h = doc.add_arc(Vector2::new(0.0, 0.0), 5.0, 0.0, 1.57).unwrap();
         let c_h = doc.add_circle(Vector2::new(5.0, 5.0), 3.0).unwrap();
-        let t_h = doc.add_text("CONCOSTCAD", Vector2::new(2.0, 2.0), 2.5, 0.0).unwrap();
+        let t_h = doc
+            .add_text("CONCOSTCAD", Vector2::new(2.0, 2.0), 2.5, 0.0)
+            .unwrap();
 
         assert_eq!(doc.cad.entities().count(), 4);
         assert!(doc.cad.get_entity(l_h).is_some());
@@ -1921,8 +2632,12 @@ mod tests {
     #[test]
     fn test_join_entities() {
         let mut doc = DrawingDocument::new();
-        let l1 = doc.add_line(Vector2::new(0.0, 0.0), Vector2::new(10.0, 0.0)).unwrap();
-        let l2 = doc.add_line(Vector2::new(10.0, 0.0), Vector2::new(10.0, 10.0)).unwrap();
+        let l1 = doc
+            .add_line(Vector2::new(0.0, 0.0), Vector2::new(10.0, 0.0))
+            .unwrap();
+        let l2 = doc
+            .add_line(Vector2::new(10.0, 0.0), Vector2::new(10.0, 10.0))
+            .unwrap();
 
         let joined = doc.join_entities(&[l1, l2]).unwrap();
         assert_eq!(doc.cad.entities().count(), 1);
@@ -1939,8 +2654,12 @@ mod tests {
     #[test]
     fn test_fillet_lines_r0_and_r_positive() {
         let mut doc = DrawingDocument::new();
-        let l1 = doc.add_line(Vector2::new(0.0, 0.0), Vector2::new(10.0, 0.0)).unwrap();
-        let l2 = doc.add_line(Vector2::new(10.0, 5.0), Vector2::new(10.0, 15.0)).unwrap();
+        let l1 = doc
+            .add_line(Vector2::new(0.0, 0.0), Vector2::new(10.0, 0.0))
+            .unwrap();
+        let l2 = doc
+            .add_line(Vector2::new(10.0, 5.0), Vector2::new(10.0, 15.0))
+            .unwrap();
 
         // Fillet R=0 extends lines to meet at (10, 0)
         let (_h1, _h2, arc_opt) = doc.fillet_lines(l1, l2, 0.0).unwrap();
@@ -1954,9 +2673,13 @@ mod tests {
     #[test]
     fn test_dxf_roundtrip_verification() {
         let mut doc = DrawingDocument::new();
-        let _l = doc.add_line(Vector2::new(0.0, 0.0), Vector2::new(100.0, 50.0)).unwrap();
+        let _l = doc
+            .add_line(Vector2::new(0.0, 0.0), Vector2::new(100.0, 50.0))
+            .unwrap();
         let _c = doc.add_circle(Vector2::new(20.0, 30.0), 15.0).unwrap();
-        let _t = doc.add_text("TEST_TEXT", Vector2::new(5.0, 5.0), 4.0, 0.5).unwrap();
+        let _t = doc
+            .add_text("TEST_TEXT", Vector2::new(5.0, 5.0), 4.0, 0.5)
+            .unwrap();
 
         let temp_dir = std::env::temp_dir();
         let test_dxf = temp_dir.join("concostcad_test_roundtrip.dxf");
@@ -1974,8 +2697,12 @@ mod tests {
     #[test]
     fn test_chamfer_lines() {
         let mut doc = DrawingDocument::new();
-        let l1 = doc.add_line(Vector2::new(0.0, 0.0), Vector2::new(10.0, 0.0)).unwrap();
-        let l2 = doc.add_line(Vector2::new(10.0, 0.0), Vector2::new(10.0, 10.0)).unwrap();
+        let l1 = doc
+            .add_line(Vector2::new(0.0, 0.0), Vector2::new(10.0, 0.0))
+            .unwrap();
+        let l2 = doc
+            .add_line(Vector2::new(10.0, 0.0), Vector2::new(10.0, 10.0))
+            .unwrap();
 
         let (_h1, _h2, bevel) = doc.chamfer_lines(l1, l2, 2.0, 3.0).unwrap();
         assert_eq!(doc.cad.entities().count(), 3);
@@ -1986,9 +2713,13 @@ mod tests {
     fn test_trim_and_extend_lines() {
         let mut doc = DrawingDocument::new();
         // Horizontal target line from (0, 0) to (20, 0)
-        let target = doc.add_line(Vector2::new(0.0, 0.0), Vector2::new(20.0, 0.0)).unwrap();
+        let target = doc
+            .add_line(Vector2::new(0.0, 0.0), Vector2::new(20.0, 0.0))
+            .unwrap();
         // Vertical cutter line at x=10 from (10, -10) to (10, 10)
-        let cutter = doc.add_line(Vector2::new(10.0, -10.0), Vector2::new(10.0, 10.0)).unwrap();
+        let cutter = doc
+            .add_line(Vector2::new(10.0, -10.0), Vector2::new(10.0, 10.0))
+            .unwrap();
 
         // Trim right half by clicking at (15, 0)
         let remaining = doc.trim_line(target, 15.0, 0.0, &[cutter]).unwrap();
@@ -1999,8 +2730,11 @@ mod tests {
         }
 
         // Now extend it back towards a boundary at x=25
-        let boundary = doc.add_line(Vector2::new(25.0, -10.0), Vector2::new(25.0, 10.0)).unwrap();
-        doc.extend_line(remaining[0], 9.0, 0.0, &[boundary]).unwrap();
+        let boundary = doc
+            .add_line(Vector2::new(25.0, -10.0), Vector2::new(25.0, 10.0))
+            .unwrap();
+        doc.extend_line(remaining[0], 9.0, 0.0, &[boundary])
+            .unwrap();
         if let Some(EntityType::Line(ext_l)) = doc.cad.get_entity(remaining[0]) {
             assert_eq!(ext_l.end.x, 25.0);
         }
@@ -2013,12 +2747,14 @@ mod tests {
         doc.set_layer_color("DIM_LAYER", 255, 0, 0).unwrap();
         doc.set_current_layer("DIM_LAYER").unwrap();
 
-        let handles = doc.add_aligned_dimension(
-            Vector2::new(0.0, 0.0),
-            Vector2::new(100.0, 0.0),
-            Vector2::new(50.0, 10.0),
-            None,
-        ).unwrap();
+        let handles = doc
+            .add_aligned_dimension(
+                Vector2::new(0.0, 0.0),
+                Vector2::new(100.0, 0.0),
+                Vector2::new(50.0, 10.0),
+                None,
+            )
+            .unwrap();
         assert_eq!(handles.len(), 6); // 2 ext lines + 1 dim line + 2 ticks + 1 text
         assert_eq!(doc.cad.entities().count(), 6);
     }
@@ -2026,8 +2762,12 @@ mod tests {
     #[test]
     fn test_load_corpus_fixtures() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let fix1 = manifest_dir.join("fixtures").join("structural_grid_sample.dxf");
-        let fix2 = manifest_dir.join("fixtures").join("mechanical_part_sample.dxf");
+        let fix1 = manifest_dir
+            .join("fixtures")
+            .join("structural_grid_sample.dxf");
+        let fix2 = manifest_dir
+            .join("fixtures")
+            .join("mechanical_part_sample.dxf");
 
         if fix1.exists() {
             let doc1 = read_cad_file(&fix1, DrawingFormat::Dxf).unwrap();
@@ -2042,7 +2782,9 @@ mod tests {
     #[test]
     fn test_dwg_roundtrip_verification() {
         let mut doc = DrawingDocument::new();
-        let _l = doc.add_line(Vector2::new(0.0, 0.0), Vector2::new(50.0, 50.0)).unwrap();
+        let _l = doc
+            .add_line(Vector2::new(0.0, 0.0), Vector2::new(50.0, 50.0))
+            .unwrap();
         let _c = doc.add_circle(Vector2::new(10.0, 10.0), 8.0).unwrap();
 
         let temp_dir = std::env::temp_dir();
@@ -2062,7 +2804,9 @@ mod tests {
         // Generate 1,000 lines and 1,000 circles (2,000 entities)
         for i in 0..1000 {
             let offset = i as f64 * 2.0;
-            let _ = doc.add_line(Vector2::new(offset, 0.0), Vector2::new(offset, 100.0)).unwrap();
+            let _ = doc
+                .add_line(Vector2::new(offset, 0.0), Vector2::new(offset, 100.0))
+                .unwrap();
             let _ = doc.add_circle(Vector2::new(offset, 50.0), 1.0).unwrap();
         }
         assert_eq!(doc.cad.entities().count(), 2000);

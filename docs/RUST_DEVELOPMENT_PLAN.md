@@ -6,7 +6,7 @@
 
 ## 1. Tóm tắt điều hành
 
-CONCOSTCAD là dự án mới, không port ứng dụng C# trước đây. Hiện repo có shell desktop `eframe`/`egui`, model document `acadrust`, file picker và luồng đọc DWG/DXF ở worker thread; có thể tạo LINE/ARC/Polyline, hiển thị LINE/ARC/LWPOLYLINE, chọn/di chuyển/xóa entity, undo/redo và lưu cùng định dạng. Những lát cắt này compile-check được nhưng chưa có kiểm chứng tương thích trên file DWG/DXF thực tế. Sản phẩm đích vẫn là CAD Windows có ribbon/panel kiểu AutoCAD, mở/sửa/lưu DWG/DXF và author/edit LINE–ARC–Polyline; khả năng lưu DWG sau chỉnh sửa là yêu cầu bắt buộc, không phải hạng mục tùy chọn hoặc read-only.
+CONCOSTCAD là dự án mới, không port ứng dụng C# trước đây. Checkout hiện dùng shell desktop Tauri 2 + frontend Vite/JavaScript, model document `acadrust`, file picker và luồng đọc DWG/DXF; các thao tác CAD được nối qua Tauri commands. Code hiện có ribbon/panels, canvas, LINE/ARC/Polyline và một số công cụ sửa bản vẽ. Đây là trạng thái triển khai trong code, chưa phải bằng chứng tương thích trên file DWG thực tế. Sản phẩm đích vẫn là CAD Windows có ribbon/panel kiểu AutoCAD, mở/sửa/lưu DWG/DXF và author/edit LINE–ARC–Polyline; khả năng lưu DWG sau chỉnh sửa là yêu cầu bắt buộc, không phải hạng mục tùy chọn hoặc read-only.
 
 Kế hoạch này xây theo vertical slice: hình học và document core, UI CAD, DXF, rồi DWG read/edit/write; mỗi giai đoạn phải để lại ứng dụng chạy được. Đích 1.0 phải mở bản vẽ DWG/DXF trong phạm vi tương thích công bố, vẽ/sửa LINE–ARC–Polyline, lưu, mở lại và xác minh không âm thầm mất dữ liệu trong phạm vi hỗ trợ.
 
@@ -19,7 +19,7 @@ Kế hoạch này xây theo vertical slice: hình học và document core, UI CA
 - Ứng dụng desktop Rust trên Windows; lưu trữ tài liệu và hình học bằng `f64`, đơn vị và quy ước tọa độ được định nghĩa tường minh.
 - Vòng đời bản vẽ đáng tin cậy: New/Open/Save/Save As DWG/DXF trong compatibility matrix, hủy tác vụ, thông báo đối tượng không hỗ trợ, lưu staging/atomic và không làm hỏng file nguồn khi lỗi.
 - Core 2D độc lập UI: LINE, CIRCLE, ARC, LWPOLYLINE có bulge; layer; selection/snap; transaction; undo/redo; command dispatch.
-- UI Windows có Ribbon theo tab, canvas, command line/nhập tọa độ, document tabs, Properties và Layers panels; shell ban đầu dùng eframe/egui + egui_dock, giữ quyết định qua usability gate tuần 2.
+- UI Windows dùng Tauri 2 + Vite/JavaScript theo lựa chọn sản phẩm đã chốt; có Ribbon theo tab, canvas, command line/nhập tọa độ, document tabs, Properties và Layers panels. Tauri là quyết định hiện hành; không quay lại egui nếu không có quyết định sản phẩm mới.
 - DXF subset được mô tả bằng ma trận version/entity có kiểm thử round-trip. DWG chỉ công bố các trường hợp đã kiểm tra bằng file được phép dùng và CAD tham chiếu.
 - Có bộ fixture hợp pháp, kiểm thử hồi quy, benchmark có thể chạy lại, log lỗi và quy trình phát hành Windows.
 - English mặc định; kiến trúc chuỗi cho phép thêm Vietnamese và Korean khi shell/UI ổn định.
@@ -32,9 +32,9 @@ Không hứa tương thích đầy đủ AutoCAD, mọi entity/phiên bản DWG,
 
 ### Trạng thái quan sát được trong checkout (27-10-2026)
 
-- `Cargo.toml` khai báo package `CONCOSTCAD`, version `0.1.0`, edition `2024`; dependencies gồm `eframe`, `egui_dock`, `rfd` và `acadrust` 0.6.7.
-- `src/document.rs` là adapter document hiện tại: thêm/sửa/xóa entity, history snapshot, dirty-state theo ID, DWG/DXF reader/writer và ghi staging file. `src/app.rs` nối adapter vào shell và chạy parse trên worker thread.
-- Canvas authoring hiện có LINE, ARC ba điểm, LWPOLYLINE thẳng; có hiển thị/hit-test LINE, ARC, bulge-polyline và thao tác chọn, Move, Erase. Các entity khác được giữ trong model nhưng chưa render/chỉnh sửa qua UI.
+- `Cargo.toml` khai báo package `CONCOSTCAD`, version `0.1.0`, edition `2024`; dependencies gồm Tauri 2, `tauri-plugin-dialog` và `acadrust` 0.6.7. Giao diện được xây trong `src-ui/`.
+- `src/document.rs` là adapter document hiện tại: thêm/sửa/xóa entity, history snapshot, dirty-state, DWG/DXF reader/writer và ghi staging file. `src/main.rs` nối adapter với Tauri commands.
+- UI đã có ribbon/panels, command line và canvas; trạng thái từng lệnh cần đối chiếu với code và acceptance evidence, không suy ra tương thích định dạng từ việc nút/lệnh đã tồn tại.
 - `cargo check` thành công trên Windows. Chưa có bằng chứng runtime/file round-trip bằng corpus DWG/DXF đại diện hoặc CAD tham chiếu; tính tương thích định dạng vẫn chưa được xác nhận.
 - Source C# không thuộc dự án mới. Các tài liệu legacy đã bị xóa theo yêu cầu; nội dung cũ không được xem là code hoặc compatibility promise của CONCOSTCAD Rust.
 
@@ -74,21 +74,22 @@ crates/
 - Dữ liệu CAD chính xác tách khỏi tessellation/cache hiển thị. Cache keyed theo revision và bị invalidation rõ ràng.
 - Xác định ranh giới `Send`/`Sync` và thread ownership trước khi đưa document lớn qua worker; tránh bọc toàn core bằng `Arc<Mutex<_>>` nếu chưa chứng minh cần.
 
-### Quyết định UI ban đầu
+### Quyết định UI hiện hành
 
-Chọn tạm `eframe/egui 0.36.2` với renderer `glow`, và `egui_dock 0.21.1` cho workspace có thể dock/tab. Các version này khớp dependency API (`egui_dock 0.21.1` dựa trên egui 0.36), build được với Rust toolchain có trong môi trường và cho phép vẽ canvas CAD trực tiếp bằng Rust. egui tự mô tả là không nhắm tới giao diện native mặc định; vì vậy CONCOSTCAD sẽ dùng theme và control riêng cho CAD, không giả vờ là WinUI. Tuần 2 vẫn là cổng đánh giá giao diện chạy thật trên Windows: nếu Ribbon/panels, DPI, keyboard và accessibility không đạt, đổi toolkit trước khi core UI phụ thuộc sâu.
-
-Tham khảo chính thức: [eframe 0.36.2](https://docs.rs/eframe/0.36.2/eframe/), [egui 0.36](https://docs.rs/egui/0.36.2/egui/), [egui_dock 0.21.1](https://docs.rs/egui_dock/0.21.1/egui_dock/). Cần khóa dependency và rà license/notice trong release process.
+Ứng dụng đang dùng Tauri 2 làm Windows desktop shell và Vite/JavaScript cho giao diện CAD. Đây là lựa chọn sản phẩm đã được người dùng chốt; phần còn lại của kế hoạch phải phát triển trên nền này. Rust giữ document model, DWG/DXF I/O và command backend; frontend chịu trách nhiệm Ribbon, canvas, panel và input. Các acceptance gate về startup, WebView2, DPI, resize, keyboard, file dialogs và đóng cửa sổ vẫn áp dụng.
 
 ### UI/MVVM
 
-MVVM là ranh giới trách nhiệm, không nhất thiết là framework. ViewModel/state reducer nhận action UI, gọi use case và phát state; canvas là projection của model. Tuần 2 so sánh Slint, egui, iced (và native Windows nếu cần) trên Ribbon/panels có thể tùy biến, canvas, command line, docking, DPI, accessibility, localization, testability, packaging, startup và redraw. Prototype phải thể hiện một cửa sổ làm việc CAD có Ribbon, canvas, Properties/Layers panels và command line; chốt theo prototype chạy được và ghi decision record.
+MVVM là ranh giới trách nhiệm, không nhất thiết là framework. Frontend Tauri phát action có kiểu qua invoke/events; Rust command/backend gọi use case và trả snapshot/event. Canvas là projection của model, không sở hữu parser hay file I/O. Đánh giá tiếp theo tập trung vào đúng stack đang dùng: input CAD, DPI, accessibility, localization, testability, packaging, startup và redraw trên Windows.
 
 ### Dữ liệu và số học
 
-- Chuẩn hóa góc (radian nội bộ), chiều cung, trục Y, tọa độ world/screen, elevation và quy ước bulge.
+- Tọa độ hình học dùng `f64` theo drawing units của file; không tự đổi sang mm. Góc nội bộ là radian, zero theo +X, dương ngược chiều kim đồng hồ; WCS 2D có Y hướng lên. ARC dùng sweep ngược chiều kim đồng hồ; LWPOLYLINE bulge bằng `tan(sweep/4)`.
+- Tách tolerance hình học khỏi tolerance hiển thị: kiểm tra song song line-line dùng `|sin(angle)| <= 1e-12` sau chuẩn hóa hướng; line-circle dùng sai số khoảng cách tương đối `16 * EPSILON`. Không dùng ngưỡng định thức/khoảng cách tuyệt đối phụ thuộc kích thước bản vẽ. Snap/hit-test UI dùng ngưỡng pixel được quy đổi qua zoom.
+- Chuẩn hóa world/screen transform, elevation và xử lý ARC có góc đầu/cuối trùng để phân biệt cung rỗng với vòng tròn đầy đủ.
 - Từ chối NaN/Inf và kích thước vượt giới hạn parser; định nghĩa tolerance theo scale thay vì một epsilon cố định cho mọi drawing.
 - Dùng ID/handle tách biệt khỏi chỉ số vector; lưu rõ thứ tự vẽ khi cần.
+- Quyết định identity hiện tại: document ID là workspace/tab ID chỉ sống trong phiên; entity và layer dùng CAD `Handle` từ `acadrust`, không dùng index hoặc tên hiển thị. Clone để edit giữ nguyên handle; entity COPY/MIRROR phải xóa handle nguồn để backend cấp handle mới. Handle truyền qua JSON cần biểu diễn không mất chính xác 64-bit.
 - Parser xử lý byte/record có giới hạn; mọi offset/count/length phải kiểm tra trước cấp phát hoặc đọc.
 
 ## 5. Chiến lược DWG/DXF và dependency
@@ -103,10 +104,17 @@ DXF là đường kiểm chứng đầu tiên vì dễ tạo fixture và so sán
 - Ứng viên đầu tiên đã chọn cho PoC là **[acadrust 0.6.7](https://docs.rs/crate/acadrust/0.6.7)**: thư viện Rust có API đọc/ghi DWG/DXF. Cargo đã resolve và build dependency thành công, nhưng đó mới chỉ xác nhận build, chưa chứng minh file mẫu đọc/sửa/lưu round-trip. Upstream công bố hỗ trợ R12–R2018+; đây không phải compatibility claim cho ứng dụng CONCOSTCAD.
 - DWG read/edit/write là điều kiện phát hành; reader và writer phải cùng làm việc trên compatibility matrix được hỗ trợ, hoặc adapter phải giữ object/metadata cần thiết khi sửa.
 - Tuần 4 xác nhận acadrust trên corpus được phép: entities, layer, tọa độ, metadata, save/reopen bằng CAD tham chiếu, malformed files, Windows build, hiệu năng và license. Nếu không đáp ứng, đánh giá engine khác hoặc adapter native có ranh giới rõ và cập nhật lịch/capacity. Không đổi yêu cầu thành read-only; không tự xây codec DWG trước khi có RFC kỹ thuật và rà pháp lý.
-- Mỗi bản vẽ có báo cáo unsupported/loss trước edited save; không âm thầm bỏ Paper Space, xref, proxy, XDATA/EED, dictionaries, style hoặc block data. Với cấu trúc trong matrix hỗ trợ, round-trip phải bảo toàn semantic data cần thiết.
+- Mỗi bản vẽ có báo cáo unsupported/loss trước edited save; backend phải chặn unknown record thiếu raw data hoặc raw DWG sai version. Không âm thầm bỏ Paper Space, xref, proxy, XDATA/EED, dictionaries, style hoặc block data. Với cấu trúc trong matrix hỗ trợ, round-trip phải bảo toàn semantic data cần thiết.
 - File không thay đổi chỉ được byte-copy nếu có fingerprint và kiểm tra file nguồn chưa đổi; không xem byte-copy là khả năng ghi DWG.
 - Mỗi claim tương thích phải trỏ tới fixture có provenance, expected output và CAD tham chiếu đã dùng.
 - acadrust được cấp phép MPL-2.0; thêm license/third-party notices vào hồ sơ phát hành. Upstream đã đóng các báo cáo malformed-input trong 0.6.3/0.6.4 sau các sửa lỗi, nhưng vẫn phải kiểm tra đúng version đã khóa và xử lý file không tin cậy bằng giới hạn kích thước/cancellation/error boundary ([DWG allocation report](https://github.com/hakanaktt/acadrust/issues/123), [malformed header report](https://github.com/hakanaktt/acadrust/issues/124), [R2018 regression report](https://github.com/hakanaktt/acadrust/issues/134)).
+
+### Bằng chứng cổng DWG hiện tại
+
+- Code có `DwgReader`/`DwgWriter` và save staging; sau khi ghi DWG, code đọc lại file tạm và so sánh entity, object records, layer records cùng semantic inventory của document trước khi thay file đích. Nếu khác, save bị từ chối và file gốc được giữ.
+- UI báo trước Unknown entity/object và diagnostic parser thuộc nhóm chưa triển khai/không hỗ trợ/lỗi; lưu chỉ tiếp tục sau khi người dùng xác nhận. Backend chặn trường hợp unknown entity/object thiếu raw payload cho định dạng đích hoặc DWG raw version không khớp version trong document.
+- `fixtures/` hiện chỉ có DXF, chưa có corpus DWG hợp pháp; chưa có kết quả mở file được lưu bằng AutoCAD hoặc CAD tham chiếu khác. Vì vậy chưa xác nhận version DWG, entity coverage, metadata/opaque preservation hay khả năng tương tác thực tế.
+- Kiểm tra hiện tại là chốt an toàn cấp code, không thay thế semantic corpus. Gate tuần 4 vẫn **chưa đạt** cho đến khi có fixture DWG đại diện và kết quả read/edit/save/reopen từ CAD tham chiếu; không nâng compatibility claim dựa trên việc dependency build được.
 
 ### Quản lý license
 
@@ -142,17 +150,17 @@ Mỗi tuần ghi: mục tiêu, đầu ra/link commit, tiêu chí đạt/chưa đ
 | Tuần | Đầu ra | Checklist hoàn thành |
 |---:|---|---|
 | 1 | Chốt product brief và corpus | [ ] Ghi yêu cầu sản phẩm mới, không port C#. [ ] Xác định workflow mở DWG/DXF → sửa LINE/ARC/Polyline → lưu/mở lại. [ ] Chuẩn bị corpus DWG/DXF hợp pháp và máy Windows chuẩn. [ ] Lập issue/risk log và provenance. |
-| 2 | Xác nhận UI/toolchain | [ ] Chạy shell egui/eframe trên Windows. [ ] Hoàn thiện prototype Ribbon, dock panels, canvas, command line. [ ] Kiểm tra DPI, input CAD, redraw, accessibility, packaging. [ ] ADR xác nhận hoặc thay framework. |
+| 2 | Xác nhận UI/toolchain | [x] Chọn Tauri 2 + Vite theo quyết định sản phẩm. [ ] Kiểm tra DPI, input CAD, redraw, accessibility và packaging trên Windows. [x] Không chuyển ngược về egui khi chưa có quyết định mới. |
 | 3 | Domain/architecture RFC | [ ] Chốt tọa độ, entity ID, units, angle/bulge, ownership. [ ] Chốt transaction/action/event và dependency direction. [ ] Chốt MSRV/toolchain policy, error/logging. [ ] Tạo skeleton workspace nhỏ. |
-| 4 | DWG engine decision gate | [ ] PoC acadrust 0.6.7 read/edit/write trên fixtures hợp pháp. [ ] Thử mở bằng CAD tham chiếu sau khi lưu. [ ] Đo mapping, opaque/unsupported preservation, malformed input, Windows build, hiệu năng. [ ] Chốt adapter/license/ma trận; DWG read/edit/save vẫn là yêu cầu bắt buộc. |
-| 5 | Build/release foundation | [ ] Workspace Cargo, CI Windows, fmt/lint/test. [ ] App shell Rust khởi động và đóng sạch. [ ] Logging/crash boundary, version metadata. [ ] Artifact debug/release tái lập. |
-| 6 | Geometry primitives | [ ] Vec/point/transform/bounds, LINE/CIRCLE/ARC. [ ] Quy ước góc và tolerance thành tài liệu. [ ] Validate finite/degenerate/large coordinate. [ ] Golden/property tests trọng yếu. |
-| 7 | Polyline và giao cắt | [ ] LWPOLYLINE bulge, segment, area/length/bounds. [ ] Giao điểm line/circle/arc và khoảng cách. [ ] Tests cho major arc, tangency, đảo chiều và số học biên. [ ] Đối chiếu thuật toán nguồn nếu có. |
-| 8 | Document model | [ ] Entity/layer/document IDs ổn định. [ ] Add/replace/remove và invariant. [ ] Block/opaque modeling decision. [ ] Serialization nội bộ debug nếu hữu ích. |
-| 9 | Transaction/history | [ ] Edit transaction atomic, rollback. [ ] Undo/redo delta, batch operation. [ ] Test chuỗi ngẫu nhiên và ID/history consistency. [ ] Không để UI sửa model trực tiếp. |
-| 10 | Viewport tối thiểu | [ ] World/screen transform, fit, zoom/pan. [ ] Render LINE/CIRCLE/ARC/polyline. [ ] Sai số tessellation theo pixel. [ ] Đo redraw đầu tiên trên fixture. |
+| 4 | DWG engine decision gate | [x] PoC adapter `acadrust` 0.6.7 read/write và staging/read-back guard trong code. [ ] Có fixtures DWG hợp pháp và kiểm tra read/edit/write semantic. [ ] Mở lại bằng CAD tham chiếu. [ ] Đo mapping, opaque/unsupported preservation, malformed input, Windows build, hiệu năng. [ ] Chốt adapter/license/ma trận; DWG read/edit/save vẫn là yêu cầu bắt buộc. **Gate chưa đạt: chưa có corpus DWG/CAD-reference evidence.** |
+| 5 | Build/release foundation | [ ] Tách Cargo workspace khi các package boundary ổn định; repo hiện vẫn là một crate. [x] CI Windows cấu hình build/test, `cargo check`, `cargo fmt` và Clippy `-D warnings`; các bước format/lint cũng pass cục bộ. [ ] Xác minh app shell khởi động và đóng sạch trên Windows. [x] Local crash log/panic hook và version metadata đã nối; [ ] kiểm tra runtime log trên Windows. [x] Local release EXE/NSIS/MSI build thành công; [ ] artifact tái lập trong CI. |
+| 6 | Geometry primitives | [x] Core LINE/CIRCLE/ARC và kiểm tra finite/degenerate hiện có. [x] Line-line intersection dùng tolerance góc tương đối, độc lập scale tọa độ. [x] Quy ước units, góc, WCS, bulge và tolerance đã ghi ở mục 4. [x] MOVE/COPY/ROTATE/MIRROR kiểm tra geometry sau transform, gồm độ dài LINE, bán kính/extents ARC/CIRCLE và metric/extents LWPOLYLINE. [x] Geometry guard có trên add/edit, DIMENSION, JOIN, FILLET, CHAMFER, TRIM, EXTEND, EXPLODE và OFFSET, tránh scan toàn drawing trên mỗi lệnh. [ ] Audit đầy đủ mọi command/parser/property path. [ ] Golden/property tests trọng yếu. |
+| 7 | Polyline và giao cắt | [x] LWPOLYLINE bulge/segment; geometry core tính length, signed area cho polyline đóng, và bounds hình học chính xác gồm cực trị cung. Bounds truyền qua snapshot Tauri để Zoom Extents và window/crossing selection dùng extents đúng. [x] Line-line và line-circle giao cắt dùng kiểm tra số học/tolerance tương đối; TRIM dùng phép chiếu theo vector đơn vị. [x] Giao điểm đường thẳng với cung ARC hữu hạn theo góc quét CCW; TRIM và EXTEND nhận ARC làm biên. [x] Hit-test thao tác click của Tauri gọi Rust core cho LINE/ARC/CIRCLE/LWPOLYLINE; pointer-move không gọi bridge. TEXT pick area xét rotation và min font 10 px nhưng font metrics vẫn gần đúng; INSERT vẫn gần đúng. [ ] Tests cho major arc, tangency, đảo chiều và số học biên. [ ] Đối chiếu thuật toán nguồn nếu có. |
+| 8 | Document model | [x] Chốt identity: document ID là workspace ID trong phiên; entity/layer identity dùng CAD `Handle`, tách khỏi index/tên hiển thị. [x] Mọi edit document stage bản sao rồi commit; COPY/MIRROR cấp handle mới và kiểm tra collision với entity nguồn trước khi commit. [x] Giữ BLOCK/INSERT và unknown/opaque records trong `acadrust::CadDocument`; save gate chặn payload unknown không thể bảo toàn. [x] Tauri truyền entity/layer handle dưới dạng chuỗi decimal không mất chính xác 64-bit; layer handle có trong snapshot và là khóa UI của panel/select. [x] Grip edit LWPOLYLINE chỉ thay tọa độ/bulge và giữ width/vertex ID chưa có editor. [x] Invariant guard toàn cục trước save: handle null/trùng giữa layer/entity, layer name trùng, entity layer reference và current-layer name/handle. Guard không quét toàn drawing sau từng edit để tránh chi phí O(N) mỗi lệnh. [ ] Chạy/đối chiếu guard trên corpus DWG/DXF hợp pháp và phân loại input lỗi. [ ] Serialization nội bộ debug nếu hữu ích. |
+| 9 | Transaction/history | [x] Các lệnh edit/replace/property trong `DrawingDocument` stage trên bản sao rồi commit geometry/history/dirty state cùng lúc; validation geometry gắn với các command edit. Chỉnh thuộc tính entity không còn phụ thuộc layer hiện hành, chỉ layer của entity phải mở khóa. [x] UI chỉ đọc snapshot và gọi Tauri command cho thao tác document; bridge xếp hàng invoke theo thứ tự gọi để response cũ không ghi đè snapshot mới. [ ] Test chuỗi ngẫu nhiên và ID/history consistency. [ ] Chuyển snapshot history sang delta/batch sau benchmark. |
+| 10 | Viewport tối thiểu | [ ] World/screen transform, fit, zoom/pan. [x] Render LINE/CIRCLE/ARC/polyline; tessellation ARC/bulge theo mật độ pixel và chặn tối đa 2.048 đoạn/cung để tránh treo khi zoom lớn. [ ] Đo redraw đầu tiên trên fixture. |
 | 11 | Index và culling | [ ] Index bounds top-level. [ ] Viewport/pick query. [ ] Oracle brute force cho add/remove/update. [ ] Benchmark build/query và memory. |
-| 12 | Selection, snap, layers | [ ] Click/window/crossing selection. [ ] Endpoint/midpoint/center/intersection snap. [ ] Layer visibility/color cơ bản. [ ] UI phản hồi trên fixture mục tiêu. |
+| 12 | Selection, snap, layers | [ ] Click/window/crossing selection. [ ] Endpoint/midpoint/center/intersection snap (code covers straight LINE/polyline, finite ARC/circle, and bulge-arc intersections; runtime/edge acceptance remains). [ ] Layer visibility/color cơ bản. [ ] UI phản hồi trên fixture mục tiêu. |
 | 13 | Command system | [ ] Registry/aliases/prompt/cancel/Escape. [ ] Nhập tọa độ absolute/relative và lịch sử lệnh. [ ] State machine test. [ ] Canonical command tách khỏi locale. |
 | 14 | Lệnh vẽ/chỉnh sửa MVP | [ ] LINE, ARC, LWPOLYLINE tạo bằng chuột và command line. [ ] Chọn, MOVE, COPY, ROTATE, ERASE cho các entity đích. [ ] Transaction/undo/redo. [ ] Save/reopen DXF test. |
 | 15 | DXF reader v1 | [ ] Parser có giới hạn và diagnostics. [ ] Chốt version/entity/layer subset. [ ] Fixture hỏng/truncated/oversized. [ ] Unsupported report và cancellation. |

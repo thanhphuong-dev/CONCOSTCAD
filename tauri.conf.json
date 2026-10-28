@@ -12,12 +12,14 @@
   "app": {
     "windows": [{
       "title": "CONCOSTCAD",
+      "backgroundColor": "#252525",
       "width": 1440,
       "height": 900,
       "minWidth": 1024,
       "minHeight": 680,
       "decorations": false,
       "maximized": true,
+      "visible": false,
       "resizable": true,
       "minimizable": true,
       "maximizable": true,
@@ -25,5 +27,5 @@
     }],
     "security": { "csp": null }
   },
-  "bundle": { "active": true, "targets": ["nsis", "msi"] }
+  "bundle": { "active": true, "targets": ["nsis", "msi"], "icon": ["icons/icon.ico"] }
 }

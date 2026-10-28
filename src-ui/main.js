@@ -1,10 +1,19 @@
-import { invoke } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./style.css";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
+
+// Rust owns the drawing model. Serialize bridge calls in dispatch order so a
+// slower older response cannot overwrite a newer CAD snapshot in the UI.
+let backendCommandQueue = Promise.resolve();
+function invoke(command, args) {
+  const result = backendCommandQueue.then(() => tauriInvoke(command, args));
+  backendCommandQueue = result.catch(() => undefined);
+  return result;
+}
 
 // Crisp CAD toolbar glyphs. Inline SVG keeps the toolbar sharp at Windows display scaling.
 const CAD_ICON_PATHS = {
@@ -44,6 +53,13 @@ const CAD_ICON_PATHS = {
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   zoomIn: '<circle cx="10" cy="10" r="6"/><path d="M15 15l5 5M7 10h6M10 7v6"/>',
   zoomOut: '<circle cx="10" cy="10" r="6"/><path d="M15 15l5 5M7 10h6"/>',
+  zoomExtents: '<path d="M8 4H4v4M16 4h4v4M20 16v4h-4M4 16v4h4"/><path d="M9 9h6v6H9z"/>',
+  zoom100: '<path d="M5 6h4v12M13 9l2-3h4v12h-6V9z"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  minus: '<path d="M5 12h14"/>',
+  layer: '<path d="M4 7h16M4 12h16M4 17h16"/><path d="M7 5v4M17 10v4M10 15v4"/>',
+  properties: '<rect x="5" y="4" width="14" height="16" rx="1"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+  add: '<path d="M12 5v14M5 12h14"/>',
   grid: '<path d="M4 4h16v16H4zM4 10h16M4 15h16M10 4v16M15 4v16"/>',
   snap: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>',
   ortho: '<path d="M5 19V7h12M5 7l4 4M17 7l-4 4"/>',
@@ -68,11 +84,12 @@ function applyToolbarIcons() {
       else button.innerHTML = cadIcon(name);
     }
   });
-  const ids = { offsetBtn: "offset", takeoffRibbonBtn: "takeoff", explodeBtn: "explode", quickExplodeBtn: "explode", eraseBtn: "erase", undoBtn: "undo", redoBtn: "redo", zoomExtents: "zoom", ribbonOpen: "open", saveBtn: "save", ribbonStartNew: "new", ribbonStartOpen: "open", finishPolylineBtn: "finish", closePolylineBtn: "close", zoomInBtn: "zoomIn", zoomOutBtn: "zoomOut", ribbonToggleGrid: "grid", ribbonToggleSnap: "snap", ribbonToggleOrtho: "ortho" };
+  const ids = { offsetBtn: "offset", takeoffRibbonBtn: "takeoff", explodeBtn: "explode", quickExplodeBtn: "explode", eraseBtn: "erase", undoBtn: "undo", redoBtn: "redo", zoomExtents: "zoomExtents", navZoomExtents: "zoomExtents", navZoomIn: "zoomIn", navZoomOut: "zoomOut", ribbonOpen: "open", saveBtn: "save", ribbonStartNew: "new", ribbonStartOpen: "open", finishPolylineBtn: "finish", closePolylineBtn: "close", zoomInBtn: "zoomIn", zoomOutBtn: "zoomOut", zoomResetBtn: "zoom100", ribbonToggleGrid: "grid", ribbonToggleSnap: "snap", ribbonToggleOrtho: "ortho", toggleGridBtn: "grid", toggleSnapBtn: "snap", toggleOrthoBtn: "ortho", showPropertiesPanel: "properties", showLayersPanel: "layer", ribbonAddLayer: "add" };
   Object.entries(ids).forEach(([id, name]) => {
     const button = document.getElementById(id);
     const existing = button?.querySelector(".tool-icon");
     if (existing) existing.innerHTML = cadIcon(name);
+    else if (id === "quickExplodeBtn" && button) button.innerHTML = cadIcon(name);
   });
 }
 
@@ -84,24 +101,27 @@ const i18n = {
     brand_sub: "PHIÊN BẢN RUST · 2.0",
     new_btn: "＋ Bản vẽ mới",
     open_btn: "▣ Mở DWG/DXF",
-    tab_home: "Trang chính",
-    tab_draw: "Vẽ (Draw)",
-    tab_annotate: "Ghi chú & Đo",
-    tab_view: "Giao diện (View)",
+    tab_home: "Home",
+    tab_draw: "Draw",
+    tab_annotate: "Annotate",
+    tab_view: "View",
     space_label: "KHÔNG GIAN MÔ HÌNH 2D · WCS",
-    grp_draw: "VẼ HÌNH HỌC",
-    grp_modify: "CHỈNH SỬA",
-    grp_layers: "QUẢN LÝ LỚP",
-    grp_annotate: "ĐO LƯỜNG",
-    grp_view_file: "XEM & TỆP",
-    grp_nav: "ĐIỀU HƯỚNG",
-    grp_aids: "HỖ TRỢ VẼ",
+    grp_draw: "DRAW",
+    grp_modify: "MODIFY",
+    grp_layers: "LAYERS",
+    grp_annotate: "ANNOTATION",
+    grp_view_file: "VIEW & FILE",
+    grp_nav: "NAVIGATION",
+    grp_aids: "DRAFTING AIDS",
     tool_select: "Chọn",
     tool_line: "Đoạn thẳng",
     tool_arc: "Cung tròn",
     tool_poly: "Đa tuyến",
     tool_circle: "Đường tròn",
     tool_rect: "Hình chữ nhật",
+    tool_spline: "Đường cong Spline",
+    tool_revcloud: "Đám mây hiệu chỉnh (Revcloud)",
+    tool_hatch: "Tô mặt cắt (Hatch)",
     tool_text: "Văn bản (Text)",
     tool_join: "Nối liền (Join)",
     tool_fillet: "Bo góc (Fillet)",
@@ -166,7 +186,7 @@ const i18n = {
     grp_draw: "DRAW",
     grp_modify: "MODIFY",
     grp_layers: "LAYERS",
-    grp_annotate: "ANNOTATE",
+    grp_annotate: "ANNOTATION",
     grp_view_file: "VIEW & FILE",
     grp_nav: "NAVIGATION",
     grp_aids: "DRAFTING AIDS",
@@ -233,7 +253,17 @@ const i18n = {
   }
 };
 
-const t = (key) => i18n[currentLang][key] || key;
+const t = (key) => i18n[currentLang]?.[key] ?? i18n.en[key] ?? key;
+
+function readQuickAccessVisibility() {
+  try {
+    const stored = JSON.parse(localStorage.getItem("concostcad_quick_access") || "{}");
+    return Object.fromEntries(["newBtn", "openBtn", "topSaveBtn", "topUndoBtn", "topRedoBtn"].map((id) => [id, stored[id] !== false]));
+  } catch (_) {
+    return { newBtn: true, openBtn: true, topSaveBtn: true, topUndoBtn: true, topRedoBtn: true };
+  }
+}
+const quickAccessVisibility = readQuickAccessVisibility();
 
 // Application State
 let model = {
@@ -254,20 +284,97 @@ function getRecentDrawings() {
   }
 }
 
+function getRecentDrawingPreview(path) {
+  try {
+    const previews = JSON.parse(localStorage.getItem("concostcad_recent_previews") || "{}");
+    return typeof previews?.[path] === "string" ? previews[path] : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function captureRecentDrawingPreview() {
+  const source = $("#cadCanvas");
+  if (!source || !source.width || !source.height) return "";
+  try {
+    const preview = document.createElement("canvas");
+    preview.width = 320;
+    preview.height = 180;
+    const ctx = preview.getContext("2d");
+    if (!ctx) return "";
+    ctx.fillStyle = "#101318";
+    ctx.fillRect(0, 0, preview.width, preview.height);
+    const scale = Math.min(preview.width / source.width, preview.height / source.height);
+    const width = source.width * scale;
+    const height = source.height * scale;
+    ctx.drawImage(source, (preview.width - width) / 2, (preview.height - height) / 2, width, height);
+    const webp = preview.toDataURL("image/webp", 0.78);
+    return webp.startsWith("data:image/webp") ? webp : preview.toDataURL("image/jpeg", 0.78);
+  } catch (_) {
+    return "";
+  }
+}
+
 function rememberRecentDrawing(path) {
   if (!path) return;
   const recent = [path, ...getRecentDrawings().filter((item) => item !== path)].slice(0, 8);
-  localStorage.setItem("concostcad_recent_drawings", JSON.stringify(recent));
+  try {
+    localStorage.setItem("concostcad_recent_drawings", JSON.stringify(recent));
+    const previews = JSON.parse(localStorage.getItem("concostcad_recent_previews") || "{}");
+    const preview = captureRecentDrawingPreview();
+    if (preview) previews[path] = preview;
+    for (const oldPath of Object.keys(previews)) {
+      if (!recent.includes(oldPath)) delete previews[oldPath];
+    }
+    localStorage.setItem("concostcad_recent_previews", JSON.stringify(previews));
+  } catch (_) {
+    // Keep the recent file list usable when browser storage is full or unavailable.
+  }
 }
 
-let activeRibbonTab = "start";
+function ribbonModeLabel(mode = ribbonDisplayMode) {
+  const labels = currentLang === "vi"
+    ? { expanded: "Ribbon đầy đủ", panels: "Chỉ hiện tên panel", tabs: "Chỉ hiện các tab" }
+    : { expanded: "Full ribbon", panels: "Panel titles only", tabs: "Tabs only" };
+  return labels[mode];
+}
+
+function ribbonModeIcon(mode = ribbonDisplayMode) {
+  return mode === "expanded" ? "⌃" : mode === "panels" ? "▱" : "⌄";
+}
+
+let activeRibbonTab = "home";
+const savedRibbonDisplayMode = localStorage.getItem("concostcad_ribbon_display_mode");
+let ribbonDisplayMode = ["expanded", "panels", "tabs"].includes(savedRibbonDisplayMode)
+  ? savedRibbonDisplayMode
+  : (localStorage.getItem("concostcad_ribbon_collapsed") === "true" ? "tabs" : "expanded");
 let showStartScreen = true;
+let startPage = "recent";
+let recentViewMode = "grid";
+const paletteVisibility = { properties: true, layers: true };
+const paletteCollapsed = { properties: false, layers: false };
+const savedPropertiesHeight = Number(localStorage.getItem("concostcad_properties_height"));
+let propertiesPanelHeight = Number.isFinite(savedPropertiesHeight) && savedPropertiesHeight >= 150
+  ? Math.min(savedPropertiesHeight, 600)
+  : 310;
+const savedSidepanelsWidth = Number(localStorage.getItem("concostcad_sidepanels_width"));
+let sidepanelsWidth = Number.isFinite(savedSidepanelsWidth) && savedSidepanelsWidth >= 220
+  ? Math.min(savedSidepanelsWidth, 520)
+  : 285;
+const savedCommandbarHeight = Number(localStorage.getItem("concostcad_commandbar_height"));
+let commandbarHeight = Number.isFinite(savedCommandbarHeight) && savedCommandbarHeight >= 56
+  ? Math.min(savedCommandbarHeight, 260)
+  : 72;
 let closeGuardBound = false;
+let menuDismissBound = false;
 let appWindowRef = null;
+let windowCloseAllowed = false;
+let closeConfirmationPending = false;
 let activeTool = "select"; // 'select', 'line', 'arc', 'polyline', 'circle', 'rectangle', 'move', 'copy', 'rotate', 'mirror', 'dist', 'area'
 let points = [];
 let zoom = 1;
 let pan = { x: 0, y: 0 };
+let viewRotation = 0;
 let world = { x: 0, y: 0 };
 let isPanning = false;
 let lastPan = null;
@@ -303,48 +410,136 @@ const app = $("#app");
 function renderShell() {
   const recent = getRecentDrawings();
   const shellTitle = showStartScreen
-    ? "Start"
+    ? "CONCOSTCAD"
     : ((model.title || "Drawing1").split(/[\\/]/).pop().replace(/\.(dwg|dxf)$/i, "") || "Drawing1");
   const shellStatus = showStartScreen
     ? (currentLang === "vi" ? "Sẵn sàng · Start" : "Ready · Start")
     : t("ready_status");
   const recentMarkup = recent.length
-    ? recent.map((path) => `<button class="recent-drawing" data-recent-path="${escapeHtml(path)}"><span class="recent-file-icon">DWG</span><span><strong>${escapeHtml(path.split(/[\\/]/).pop())}</strong><small>${escapeHtml(path)}</small></span></button>`).join("")
-    : `<div class="start-empty">${currentLang === "vi" ? "Chưa có bản vẽ gần đây" : "No recent drawings"}</div>`;
+    ? recent.map((path) => {
+        const filename = path.split(/[\\/]/).pop();
+        const extension = (filename.split(".").pop() || "DWG").toUpperCase();
+        const preview = getRecentDrawingPreview(path);
+        return `<article class="recent-drawing">
+          <button class="recent-open" data-recent-path="${escapeHtml(path)}" title="${escapeHtml(path)}">
+            <span class="recent-thumb" aria-hidden="true"><span class="recent-thumb-mark">${escapeHtml(extension)}</span>${preview ? `<img src="${preview}" alt="">` : `<svg viewBox="0 0 160 90"><path d="M28 62h104M42 27v36M118 27v36M42 27h76M53 47h54M68 35v25M93 35v25"/></svg>`}</span>
+            <span class="recent-meta"><strong>${escapeHtml(filename)}</strong><small>${escapeHtml(path)}</small></span>
+          </button>
+          <details class="recent-actions">
+            <summary class="recent-more" title="${currentLang === "vi" ? `Tùy chọn ${escapeHtml(filename)}` : `Options for ${escapeHtml(filename)}`}" aria-label="${currentLang === "vi" ? `Tùy chọn ${escapeHtml(filename)}` : `Options for ${escapeHtml(filename)}`}">•••</summary>
+            <div class="recent-actions-menu"><button type="button" data-remove-recent="${escapeHtml(path)}">${currentLang === "vi" ? "Xóa khỏi danh sách gần đây" : "Remove from Recent"}</button></div>
+          </details>
+        </article>`;
+      }).join("")
+    : `<div class="start-empty"><span class="start-empty-icon" aria-hidden="true">▧</span><strong>${currentLang === "vi" ? "Chưa có bản vẽ gần đây" : "No recent drawings"}</strong><span>${currentLang === "vi" ? "Mở DWG/DXF hoặc tạo bản vẽ mới để bắt đầu." : "Open a DWG/DXF or create a new drawing to get started."}</span><div class="start-empty-actions"><button id="emptyStartNew">${currentLang === "vi" ? "Bản vẽ mới" : "New Drawing"}</button><button id="emptyStartOpen">${currentLang === "vi" ? "Mở tệp..." : "Open File..."}</button></div></div>`;
+  const menuRecentMarkup = recent.slice(0, 9).map((path, index) => {
+    const filename = path.split(/[\\/]/).pop();
+    return `<button class="menu-recent" type="button" data-menu-recent="${escapeHtml(path)}"><span>${index + 1} ${escapeHtml(filename)}</span></button>`;
+  }).join("");
+  const menuWindowDocs = openDocuments
+    .filter((drawing) => !(showStartScreen && drawing.title === "Drawing1" && !drawing.dirty && drawing.path === "Drawing1"))
+    .map((drawing) => `<button type="button" data-menu-window-doc="${drawing.id}" class="${drawing.id === activeDocId && !showStartScreen ? "checked" : ""}"><span>${escapeHtml(drawing.title)}</span>${drawing.id === activeDocId && !showStartScreen ? "✓" : ""}</button>`)
+    .join("");
   app.innerHTML = `
-    <header class="titlebar" data-tauri-drag-region>
-      <div class="brand-mark">C</div>
-      <div class="brand">CONCOST<span>CAD</span></div>
-      <div class="title-divider"></div>
-      <button class="title-action" id="newBtn">${t("new_btn")}</button>
-      <button class="title-action" id="openBtn">${t("open_btn")}</button>
-      <div class="title-name" id="titleName">${escapeHtml(shellTitle)}</div>
-      <div class="title-spacer"></div>
+    <header class="titlebar">
+      <img class="brand-mark" src="/CONCOST.ico" alt="CONCOSTCAD" data-tauri-drag-region>
+      <div class="title-divider" data-tauri-drag-region></div>
+      <div class="top-quick-access" role="toolbar" aria-label="${currentLang === "vi" ? "Truy cập nhanh" : "Quick access"}">
+        <button class="quick-access-button" id="newBtn" data-quick-access="newBtn" ${quickAccessVisibility.newBtn ? "" : "hidden"} title="${t("new_btn")}" aria-label="${t("new_btn")}">${cadIcon("new")}</button>
+        <button class="quick-access-button" id="openBtn" data-quick-access="openBtn" ${quickAccessVisibility.openBtn ? "" : "hidden"} title="${t("open_btn")}" aria-label="${t("open_btn")}">${cadIcon("open")}</button>
+        <span class="quick-access-divider" data-qat-divider="files" ${((quickAccessVisibility.newBtn || quickAccessVisibility.openBtn) && quickAccessVisibility.topSaveBtn) ? "" : "hidden"} aria-hidden="true"></span>
+        <button class="quick-access-button" id="topSaveBtn" data-quick-access="topSaveBtn" ${quickAccessVisibility.topSaveBtn ? "" : "hidden"} title="${t("tool_save")}" aria-label="${t("tool_save")}">${cadIcon("save")}</button>
+        <span class="quick-access-divider" data-qat-divider="history" ${((quickAccessVisibility.topUndoBtn || quickAccessVisibility.topRedoBtn) && quickAccessVisibility.topSaveBtn) ? "" : "hidden"} aria-hidden="true"></span>
+        <button class="quick-access-button" id="topUndoBtn" data-quick-access="topUndoBtn" ${quickAccessVisibility.topUndoBtn ? "" : "hidden"} title="${t("tool_undo")}" aria-label="${t("tool_undo")}">${cadIcon("undo")}</button>
+        <button class="quick-access-button" id="topRedoBtn" data-quick-access="topRedoBtn" ${quickAccessVisibility.topRedoBtn ? "" : "hidden"} title="${t("tool_redo")}" aria-label="${t("tool_redo")}">${cadIcon("redo")}</button>
+        <details class="app-menu quick-access-customize">
+          <summary class="quick-access-caret" title="${currentLang === "vi" ? "Tùy chỉnh thanh truy cập nhanh" : "Customize Quick Access Toolbar"}" aria-label="${currentLang === "vi" ? "Tùy chỉnh thanh truy cập nhanh" : "Customize Quick Access Toolbar"}">⌄</summary>
+          <div class="menu-popup quick-access-popup">
+            <strong>${currentLang === "vi" ? "Tùy chỉnh thanh truy cập nhanh" : "Customize Quick Access Toolbar"}</strong>
+            ${[["newBtn", currentLang === "vi" ? "Bản vẽ mới" : "New Drawing"], ["openBtn", currentLang === "vi" ? "Mở DWG/DXF" : "Open DWG/DXF"], ["topSaveBtn", currentLang === "vi" ? "Lưu" : "Save"], ["topUndoBtn", currentLang === "vi" ? "Hoàn tác" : "Undo"], ["topRedoBtn", currentLang === "vi" ? "Làm lại" : "Redo"]].map(([id, label]) => `<label><input type="checkbox" data-quick-access-toggle="${id}" ${quickAccessVisibility[id] ? "checked" : ""}><span>${label}</span></label>`).join("")}
+          </div>
+        </details>
+      </div>
+      <div class="title-name" id="titleName" data-tauri-drag-region>${escapeHtml(shellTitle)}</div>
+      <div class="title-spacer" data-tauri-drag-region></div>
       <button class="title-action" id="langToggleBtn" style="height:22px; padding:0 8px; font-weight:700; color:#8fe2f3; background:#1b3846;" title="Toggle Language (VI / EN)">${currentLang.toUpperCase()}</button>
-      <div class="edition">${t("brand_sub")}</div>
+      <div class="edition" data-tauri-drag-region>${t("brand_sub")}</div>
       <div class="window-controls">
         <button aria-label="Minimize" id="minimizeBtn">−</button>
         <button aria-label="Maximize" id="maximizeBtn">□</button>
         <button aria-label="Close" id="closeBtn">×</button>
       </div>
     </header>
+    <nav class="menubar" aria-label="Application menu">
+      <details class="app-menu">
+        <summary class="menu-trigger">File</summary>
+        <div class="menu-popup file-menu-popup">
+          <button id="menuNewDrawing"><span>New...</span><kbd>Ctrl+N</kbd></button>
+          <button id="menuOpenDrawing"><span>Open...</span><kbd>Ctrl+O</kbd></button>
+          <button type="button" disabled><span>Open Sheet Set...</span></button>
+          <button type="button" disabled><span>Open File From Cloud...</span></button>
+          <button type="button" disabled><span>Sheet Set Manager...</span></button>
+          <button type="button" disabled><span>Recover...</span></button>
+          <button type="button" disabled><span>Drawing Recovery Manager...</span></button>
+          <button type="button" disabled><span>DWG Convert...</span></button>
+          <div class="menu-separator"></div>
+          <button id="menuFileCloseDrawing" ${showStartScreen ? "disabled" : ""}><span>Close</span></button>
+          <button id="menuSaveDrawing" ${showStartScreen ? "disabled" : ""}><span>Save</span><kbd>Ctrl+S</kbd></button>
+          <button id="menuSaveAsDrawing" ${showStartScreen ? "disabled" : ""}><span>Save As...</span></button>
+          <div class="menu-separator"></div>
+          <button type="button" disabled><span>Print</span><kbd>Ctrl+P</kbd></button>
+          ${menuRecentMarkup ? `<div class="menu-separator"></div>${menuRecentMarkup}` : ""}
+          <div class="menu-separator"></div>
+          <button id="menuExit"><span>Exit</span><kbd>Alt+F4</kbd></button>
+        </div>
+      </details>
+      <details class="app-menu">
+        <summary class="menu-trigger">Window</summary>
+        <div class="menu-popup">
+          <button id="menuCloseDrawing" ${showStartScreen ? "disabled" : ""}><span>Close</span></button>
+          <button id="menuCloseAllDrawings" ${showStartScreen ? "disabled" : ""}><span>Close All</span></button>
+          <div class="menu-separator"></div>
+          <button type="button" disabled><span>Cascade</span></button>
+          <button type="button" disabled><span>Tile Horizontally</span></button>
+          <button type="button" disabled><span>Tile Vertically</span></button>
+          <button type="button" disabled><span>Arrange Icons</span></button>
+          ${menuWindowDocs ? `<div class="menu-separator"></div>${menuWindowDocs}` : ""}
+          <div class="menu-separator"></div>
+          <button id="menuToggleProperties" class="${paletteVisibility.properties ? "checked" : ""}"><span>Properties palette</span>${paletteVisibility.properties ? "✓" : ""}</button>
+          <button id="menuToggleLayers" class="${paletteVisibility.layers ? "checked" : ""}"><span>Layer palette</span>${paletteVisibility.layers ? "✓" : ""}</button>
+        </div>
+      </details>
+      <details class="app-menu">
+        <summary class="menu-trigger">Help</summary>
+        <div class="menu-popup">
+          <button id="menuHelp">Help CONCOSTCAD</button>
+          <button id="menuKeyboardHelp">Keyboard shortcuts...</button>
+          <div class="menu-separator"></div>
+          <button id="menuAbout">About CONCOSTCAD</button>
+        </div>
+      </details>
+      <span class="menu-bar-spacer" data-tauri-drag-region></span>
+    </nav>
     <nav class="tabs" id="ribbonTabs">
-      <button class="tab ${activeRibbonTab==='start'?'active':''}" data-tab="start">Start</button>
       <button class="tab ${activeRibbonTab==='home'?'active':''}" data-tab="home">${t("tab_home")}</button>
-      <button class="tab ${activeRibbonTab==='draw'?'active':''}" data-tab="draw">${t("tab_draw")}</button>
-      <button class="tab ${activeRibbonTab==='annotate'?'active':''}" data-tab="annotate">${t("tab_annotate")}</button>
-      <button class="tab ${activeRibbonTab==='view'?'active':''}" data-tab="view">${t("tab_view")}</button>
+      <button class="tab ${activeRibbonTab==='draw'?'active':''}" data-tab="draw">Draw</button>
+      <button class="tab ${activeRibbonTab==='annotate'?'active':''}" data-tab="annotate">Annotate</button>
+      <button class="tab ${activeRibbonTab==='view'?'active':''}" data-tab="view">View</button>
+      <button class="tab ${activeRibbonTab==='manage'?'active':''}" data-tab="manage">Manage</button>
+      <button class="tab ${activeRibbonTab==='output'?'active':''}" data-tab="output">Output</button>
+      <button class="ribbon-collapse-toggle" id="ribbonCollapseBtn" aria-label="${currentLang === "vi" ? `Chế độ ribbon: ${ribbonModeLabel()}` : `Ribbon display: ${ribbonModeLabel()}`}" aria-expanded="${ribbonDisplayMode === "expanded"}" title="${currentLang === "vi" ? `Chế độ ribbon: ${ribbonModeLabel()} · nhấn để đổi` : `Ribbon display: ${ribbonModeLabel()} · click to cycle`}">${ribbonModeIcon()}</button>
       <span class="space-label">${t("space_label")}</span>
     </nav>
     <section class="ribbon" id="ribbonContainer"></section>
+    <div class="drawing-tab" id="documentTabs"></div>
     <main class="workspace">
       <aside class="quickbar">
         <button title="${t('tool_select')} (Esc)" data-tool="select" class="${activeTool==='select'?'selected':''}">↖</button>
-        <button title="${t('tool_line')} (L)" data-tool="line" class="${activeTool==='line'?'selected':''}">／</button>
-        <button title="${t('tool_arc')} (A)" data-tool="arc" class="${activeTool==='arc'?'selected':''}">◜</button>
-        <button title="${t('tool_poly')} (PL)" data-tool="polyline" class="${activeTool==='polyline'?'selected':''}">⌁</button>
-        <button title="${t('tool_circle')} (C)" data-tool="circle" class="${activeTool==='circle'?'selected':''}">◯</button>
-        <button title="${t('tool_rect')} (REC)" data-tool="rectangle" class="${activeTool==='rectangle'?'selected':''}">▭</button>
+        <button title="${t('tool_line')} (L)" data-tool="line" class="${activeTool==='line'?'selected':''}" aria-label="${t('tool_line')} (L)">${cadIcon("line")}</button>
+        <button title="${t('tool_arc')} (A)" data-tool="arc" class="${activeTool==='arc'?'selected':''}" aria-label="${t('tool_arc')} (A)">${cadIcon("arc")}</button>
+        <button title="${t('tool_poly')} (PL)" data-tool="polyline" class="${activeTool==='polyline'?'selected':''}" aria-label="${t('tool_poly')} (PL)">${cadIcon("polyline")}</button>
+        <button title="${t('tool_circle')} (C)" data-tool="circle" class="${activeTool==='circle'?'selected':''}" aria-label="${t('tool_circle')} (C)">${cadIcon("circle")}</button>
+        <button title="${t('tool_rect')} (REC)" data-tool="rectangle" class="${activeTool==='rectangle'?'selected':''}" aria-label="${t('tool_rect')} (REC)">${cadIcon("rectangle")}</button>
         <button title="${t('tool_move')} (M)" data-tool="move" class="${activeTool==='move'?'selected':''}">✥</button>
         <button title="${t('tool_copy')} (CO)" data-tool="copy" class="${activeTool==='copy'?'selected':''}">⧉</button>
         <button title="${t('tool_rotate')} (RO)" data-tool="rotate" class="${activeTool==='rotate'?'selected':''}">⟳</button>
@@ -356,57 +551,65 @@ function renderShell() {
         <div class="quickbar-bottom">2D</div>
       </aside>
       <section class="drawing-area">
-        <div class="drawing-tab">
-          <span class="tab-arrow">▾</span>
-          <div class="drawing-tab-label">
-            <span class="file-dot"></span>
-            <span id="drawingTabName">Drawing1</span>
-            <span class="dirty-dot" id="dirtyDot"></span>
-            <button class="close-tab" id="closeDrawingTab">×</button>
-          </div>
-          <div class="tab-tools">
-            <button title="Settings">▾</button>
-          </div>
-        </div>
         <div class="viewport" id="viewport" tabindex="0">
           <canvas id="cadCanvas"></canvas>
-          <div class="empty-hint" id="emptyHint">
-            <div class="hint-icon">＋</div>
-            <div class="hint-title">CONCOSTCAD Workspace</div>
-            <div class="hint-sub">Click on canvas to draw or drag mouse to window-select objects.</div>
-            <div class="hint-shortcuts">
-              <span>LINE</span>
-              <span>ARC</span>
-              <span>PLINE</span>
-              <span>CIRCLE</span>
-              <span>RECT</span>
-            </div>
+          <div class="cad-crosshair" id="cadCrosshair" aria-hidden="true" hidden>
+            <i class="crosshair-line crosshair-horizontal-before"></i>
+            <i class="crosshair-line crosshair-horizontal-after"></i>
+            <i class="crosshair-line crosshair-vertical-before"></i>
+            <i class="crosshair-line crosshair-vertical-after"></i>
+            <i class="crosshair-pickbox"></i>
           </div>
-          <div class="canvas-coords" id="canvasCoords">MODEL SPACE · GRID ON · UCS WORLD</div>
-          <div class="layout-tab-bar" id="layoutTabBar">
-            <button class="layout-tab active" data-space="model">Model</button>
-            <button class="layout-tab" data-space="layout1">Layout1</button>
-            <button class="layout-tab" data-space="layout2">Layout2</button>
-            <button class="layout-add-btn" id="addLayoutBtn" title="Thêm bố cục mới">＋</button>
+          <div class="ucs-indicator" id="canvasCoords" title="World Coordinate System" aria-label="World Coordinate System">
+            <svg viewBox="0 0 40 38" aria-hidden="true">
+              <path class="ucs-axis-x" d="M8 29H34M29 24l5 5-5 5" />
+              <path class="ucs-axis-y" d="M8 29V4M3 9l5-5 5 5" />
+              <circle cx="8" cy="29" r="2" />
+              <text class="ucs-label-x" x="31" y="21">X</text>
+              <text class="ucs-label-y" x="14" y="9">Y</text>
+            </svg>
+            <span id="canvasSpaceLabel">WCS</span>
           </div>
-          <div class="view-cube"><span>TOP</span><i></i><small>W</small></div>
-          <div class="nav-wheel">⌖<br><span>−</span><br>＋</div>
+          <div class="view-cube" id="viewCube" aria-label="ViewCube">
+            <span class="cube-compass-ring" aria-hidden="true"></span>
+            <button class="cube-direction cube-north" data-cube-heading="N" aria-pressed="true" title="North up">N</button>
+            <button class="cube-direction cube-east" data-cube-heading="E" title="East up">E</button>
+            <button class="cube-direction cube-south" data-cube-heading="S" title="South up">S</button>
+            <button class="cube-direction cube-west" data-cube-heading="W" title="West up">W</button>
+            <button class="cube-top-face" id="cubeTopButton" title="Top view · North up" aria-label="Top view · North up">TOP</button>
+          </div>
+          <div class="nav-wheel" role="toolbar" aria-label="View navigation">
+            <button class="nav-control" id="navZoomExtents" title="Zoom Extents" aria-label="Zoom Extents"><span class="tool-icon"></span></button>
+            <button class="nav-control" id="navZoomIn" title="Zoom In" aria-label="Zoom In"><span class="tool-icon"></span></button>
+            <button class="nav-control" id="navZoomOut" title="Zoom Out" aria-label="Zoom Out"><span class="tool-icon"></span></button>
+          </div>
+        </div>
+        <div class="layout-tab-bar" id="layoutTabBar">
+          <button class="layout-tab active" data-space="model">Model</button>
+          <button class="layout-tab" data-space="layout1">Layout1</button>
+          <button class="layout-tab" data-space="layout2">Layout2</button>
+          <button class="layout-add-btn" id="addLayoutBtn" title="Thêm bố cục mới">＋</button>
         </div>
       </section>
-      <aside class="sidepanels">
-        <section class="panel properties">
+      <div class="palette-width-splitter" id="paletteWidthSplitter" role="separator" aria-label="Resize docked palettes" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="520" aria-valuenow="${sidepanelsWidth}" tabindex="0" ${!Object.values(paletteVisibility).some(Boolean) ? "hidden" : ""}></div>
+      <aside class="sidepanels ${Object.values(paletteVisibility).some(Boolean) ? "" : "empty"}" style="--properties-panel-height: ${propertiesPanelHeight}px; --sidepanels-width: ${sidepanelsWidth}px">
+        <section class="panel properties ${paletteVisibility.properties ? "" : "palette-hidden"} ${paletteCollapsed.properties ? "collapsed" : ""}">
           <div class="panel-heading">
             <span class="panel-grip">⠿</span>
             <span>${t("prop_heading")}</span>
-            <button id="toggleProperties">⌄</button>
+            <button class="panel-collapse" id="toggleProperties" title="Collapse Properties" aria-label="Collapse Properties" aria-expanded="${!paletteCollapsed.properties}">${paletteCollapsed.properties ? "›" : "⌄"}</button>
+            <button class="panel-close" id="hideProperties" title="Close Properties" aria-label="Close Properties">×</button>
           </div>
           <div class="panel-body" id="propertiesBody"></div>
         </section>
-        <section class="panel layers">
+        <div class="palette-splitter" id="paletteSplitter" role="separator" aria-label="Resize Properties palette" aria-orientation="horizontal" aria-valuemin="150" aria-valuemax="600" aria-valuenow="${propertiesPanelHeight}" tabindex="0" ${!paletteVisibility.properties || !paletteVisibility.layers || paletteCollapsed.properties || paletteCollapsed.layers ? "hidden" : ""}></div>
+        <section class="panel layers ${paletteVisibility.layers ? "" : "palette-hidden"} ${paletteCollapsed.layers ? "collapsed" : ""}">
           <div class="panel-heading">
             <span class="panel-grip">⠿</span>
             <span>${t("layer_heading")}</span>
+            <button class="panel-collapse" id="toggleLayers" title="Collapse Layers" aria-label="Collapse Layers" aria-expanded="${!paletteCollapsed.layers}">${paletteCollapsed.layers ? "›" : "⌄"}</button>
             <button class="add-layer" id="addLayerBtn" title="${t('add_layer')}">＋</button>
+            <button class="panel-close" id="hideLayers" title="Close Layers" aria-label="Close Layers">×</button>
           </div>
           <div id="newLayerContainer" class="new-layer-box" style="display:none;">
             <input type="text" id="newLayerInput" class="new-layer-input" placeholder="Layer name..." />
@@ -417,7 +620,8 @@ function renderShell() {
         </section>
       </aside>
     </main>
-    <section class="commandbar">
+    <div class="commandbar-splitter" id="commandbarSplitter" role="separator" aria-label="Resize command line" aria-orientation="horizontal" aria-valuemin="56" aria-valuemax="260" aria-valuenow="${commandbarHeight}" tabindex="0"></div>
+    <section class="commandbar" style="--commandbar-height: ${commandbarHeight}px">
       <div class="command-history" id="commandHistory" aria-live="polite"></div>
       <div class="command-entry">
         <div class="prompt-mark">Command:</div>
@@ -433,37 +637,112 @@ function renderShell() {
       <div class="status-right">
         <span id="coordReadout">X  0.000   Y  0.000</span>
         <span class="status-sep"></span>
-        <button id="toggleGridBtn" class="status-toggle active" title="Toggle Grid">${t("grid_btn")}</button>
-        <button id="toggleSnapBtn" class="status-toggle active" title="Toggle Object Snap (F3)">${t("snap_btn")}</button>
-        <button id="toggleOrthoBtn" class="status-toggle" title="Toggle Ortho Mode (F8)">${t("ortho_btn")}</button>
+        <button id="toggleGridBtn" class="status-toggle active" title="Toggle Grid" aria-label="${t("grid_btn")}" aria-pressed="true"><span class="tool-icon" aria-hidden="true"></span><span>GRID</span></button>
+        <button id="toggleSnapBtn" class="status-toggle active" title="Toggle Object Snap (F3)" aria-label="${t("snap_btn")}" aria-pressed="true"><span class="tool-icon" aria-hidden="true"></span><span>OSNAP</span></button>
+        <button id="toggleOrthoBtn" class="status-toggle" title="Toggle Ortho Mode (F8)" aria-label="${t("ortho_btn")}" aria-pressed="false"><span class="tool-icon" aria-hidden="true"></span><span>ORTHO</span></button>
         <span class="zoom-readout" id="zoomReadout">100%</span>
         <button class="user-icon" title="Engineer Thanh Phuong">P</button>
       </div>
     </footer>
     <section class="start-screen ${showStartScreen ? "" : "hidden"}" id="startScreen">
-      <div class="start-content">
-        <div class="start-brand"><span class="start-brand-mark">C</span><div><strong>CONCOSTCAD</strong><small>${currentLang === "vi" ? "Bản vẽ kỹ thuật 2D" : "2D drafting workspace"}</small></div></div>
-        <div class="start-actions">
-          <button class="start-card primary" id="startNewBtn"><span class="start-card-icon">＋</span><span><strong>${currentLang === "vi" ? "Bản vẽ mới" : "New Drawing"}</strong><small>${currentLang === "vi" ? "Tạo bản vẽ trống" : "Start with a blank drawing"}</small></span></button>
-          <button class="start-card" id="startOpenBtn"><span class="start-card-icon">▣</span><span><strong>${currentLang === "vi" ? "Mở tệp" : "Open Files"}</strong><small>DWG / DXF</small></span></button>
+      <aside class="start-sidebar">
+        <div class="start-sidebar-brand"><span class="start-brand-mark">C</span><div><strong>CONCOSTCAD</strong><small>${currentLang === "vi" ? "Không gian bản vẽ" : "Drafting workspace"}</small></div></div>
+        <div class="start-sidebar-actions">
+          <button class="start-action" id="startOpenBtn"><span class="start-action-icon" aria-hidden="true">▱</span>${currentLang === "vi" ? "Mở tệp..." : "Open..."}</button>
+          <button class="start-action" id="startNewBtn"><span class="start-action-icon" aria-hidden="true">＋</span>${currentLang === "vi" ? "Bản vẽ mới" : "New Drawing"}</button>
         </div>
-        <div class="start-columns">
-          <div class="start-panel"><div class="start-panel-title">${currentLang === "vi" ? "Gần đây" : "Recent"}</div><div class="recent-list">${recentMarkup}</div></div>
-          <div class="start-panel"><div class="start-panel-title">${currentLang === "vi" ? "Bắt đầu" : "Getting Started"}</div><div class="start-tip">${currentLang === "vi" ? "Tạo bản vẽ mới hoặc mở DWG/DXF để bắt đầu làm việc." : "Create a new drawing or open a DWG/DXF to begin."}</div></div>
-        </div>
-        <div class="start-footer">CONCOSTCAD · ${currentLang === "vi" ? "Không gian làm việc bản vẽ" : "Drafting workspace"}</div>
+        <div class="start-sidebar-divider"></div>
+        <nav class="start-nav" aria-label="${currentLang === "vi" ? "Điều hướng màn hình bắt đầu" : "Start screen navigation"}">
+          <button class="start-nav-item ${startPage === "recent" ? "active" : ""}" data-start-page="recent"><span aria-hidden="true">◷</span>${currentLang === "vi" ? "Gần đây" : "Recent"}</button>
+          <button class="start-nav-item ${startPage === "learn" ? "active" : ""}" data-start-page="learn"><span aria-hidden="true">ⓘ</span>${currentLang === "vi" ? "Bắt đầu" : "Getting Started"}</button>
+        </nav>
+        <div class="start-sidebar-footer">DWG · DXF <span>•</span> mm</div>
+      </aside>
+      <div class="start-main">
+        <section class="start-page-content ${startPage === "recent" ? "active" : ""}" data-start-content="recent">
+          <div class="start-main-heading"><div><h1>${currentLang === "vi" ? "Gần đây" : "Recent"}</h1><p>${currentLang === "vi" ? "Tiếp tục làm việc với bản vẽ của bạn" : "Continue working on your drawings"}</p></div>
+            <div class="recent-view-toggle" role="group" aria-label="${currentLang === "vi" ? "Kiểu hiển thị bản vẽ" : "Drawing view mode"}">
+              <button class="${recentViewMode === "list" ? "active" : ""}" data-recent-mode="list" aria-label="${currentLang === "vi" ? "Danh sách" : "List view"}" aria-pressed="${recentViewMode === "list"}">☰</button>
+              <button class="${recentViewMode === "grid" ? "active" : ""}" data-recent-mode="grid" aria-label="${currentLang === "vi" ? "Lưới" : "Grid view"}" aria-pressed="${recentViewMode === "grid"}">▦</button>
+            </div>
+          </div>
+          <div class="recent-grid ${recentViewMode === "list" ? "list-view" : ""} ${recent.length ? "" : "empty-grid"}">${recentMarkup}</div>
+        </section>
+        <section class="start-page-content start-learn ${startPage === "learn" ? "active" : ""}" data-start-content="learn">
+          <div class="start-main-heading"><div><h1>${currentLang === "vi" ? "Bắt đầu với CONCOSTCAD" : "Getting Started"}</h1><p>${currentLang === "vi" ? "Các bước cơ bản để bắt đầu một bản vẽ kỹ thuật 2D." : "A few basics to get your 2D drawing started."}</p></div></div>
+          <div class="learn-cards">
+            <article class="learn-card"><span class="learn-step">01</span><div><h2>${currentLang === "vi" ? "Tạo hoặc mở bản vẽ" : "Create or open a drawing"}</h2><p>${currentLang === "vi" ? "Tạo bản vẽ trống hoặc mở tệp DWG/DXF từ máy tính." : "Start blank or open a DWG/DXF file from your computer."}</p></div><button id="learnNewBtn">${currentLang === "vi" ? "Bản vẽ mới" : "New Drawing"}</button><button id="learnOpenBtn">${currentLang === "vi" ? "Mở tệp" : "Open File"}</button></article>
+            <article class="learn-card"><span class="learn-step">02</span><div><h2>${currentLang === "vi" ? "Vẽ hình học" : "Draw geometry"}</h2><p>${currentLang === "vi" ? "Chọn LINE, ARC hoặc PLINE trên thanh công cụ, rồi chỉ điểm trên vùng vẽ." : "Choose LINE, ARC, or PLINE from the ribbon, then specify points on the canvas."}</p></div><span class="learn-command">LINE · ARC · PLINE</span></article>
+            <article class="learn-card"><span class="learn-step">03</span><div><h2>${currentLang === "vi" ? "Lưu tệp" : "Save your work"}</h2><p>${currentLang === "vi" ? "Lưu bản vẽ dưới định dạng DWG hoặc DXF." : "Save your drawing as a DWG or DXF file."}</p></div><span class="learn-command">DWG · DXF</span></article>
+          </div>
+        </section>
       </div>
     </section>
   `;
 
+  applyRibbonDisplayMode();
   renderCommandLog();
   applyToolbarIcons();
   bindShellEvents();
 }
 
+function setRibbonDisplayMode(mode) {
+  ribbonDisplayMode = mode;
+  localStorage.setItem("concostcad_ribbon_display_mode", ribbonDisplayMode);
+  applyRibbonDisplayMode();
+}
+
+function applyRibbonDisplayMode() {
+  const appRoot = $("#app");
+  if (!appRoot) return;
+  appRoot.classList.remove("ribbon-mode-expanded", "ribbon-mode-panels", "ribbon-mode-tabs", "ribbon-collapsed");
+  appRoot.classList.add(`ribbon-mode-${ribbonDisplayMode}`);
+  const button = $("#ribbonCollapseBtn");
+  if (button) {
+    button.textContent = ribbonModeIcon();
+    button.setAttribute("aria-expanded", String(ribbonDisplayMode === "expanded"));
+    button.setAttribute("aria-label", currentLang === "vi" ? `Chế độ ribbon: ${ribbonModeLabel()}` : `Ribbon display: ${ribbonModeLabel()}`);
+    button.title = currentLang === "vi" ? `Chế độ ribbon: ${ribbonModeLabel()} · nhấn để đổi` : `Ribbon display: ${ribbonModeLabel()} · click to cycle`;
+  }
+  $$("#ribbonContainer .group-caption").forEach((caption) => {
+    if (ribbonDisplayMode === "panels") {
+      caption.setAttribute("role", "button");
+      caption.tabIndex = 0;
+      caption.title = currentLang === "vi" ? "Nhấn để mở ribbon đầy đủ" : "Click to expand the ribbon";
+      caption.onclick = () => setRibbonDisplayMode("expanded");
+      caption.onkeydown = (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          setRibbonDisplayMode("expanded");
+        }
+      };
+    } else {
+      caption.removeAttribute("role");
+      caption.removeAttribute("tabindex");
+      caption.removeAttribute("title");
+      caption.onclick = null;
+      caption.onkeydown = null;
+    }
+  });
+}
+
 function bindShellEvents() {
   const canvasEl = $("#cadCanvas");
   const viewportEl = $("#viewport");
+  const crosshairEl = $("#cadCrosshair");
+
+  viewportEl?.addEventListener("pointermove", (event) => {
+    if (!crosshairEl || event.pointerType === "touch") return;
+    const bounds = viewportEl.getBoundingClientRect();
+    crosshairEl.style.setProperty("--crosshair-x", `${event.clientX - bounds.left}px`);
+    crosshairEl.style.setProperty("--crosshair-y", `${event.clientY - bounds.top}px`);
+    crosshairEl.hidden = false;
+    viewportEl.classList.add("crosshair-active");
+  });
+  viewportEl?.addEventListener("pointerleave", () => {
+    if (crosshairEl) crosshairEl.hidden = true;
+    viewportEl.classList.remove("crosshair-active");
+  });
 
   $("#langToggleBtn").onclick = () => {
     currentLang = currentLang === "vi" ? "en" : "vi";
@@ -475,21 +754,29 @@ function bindShellEvents() {
 
   $$("#ribbonTabs .tab").forEach((tab) => {
     tab.onclick = () => {
-      if (tab.dataset.tab === "start" && !showStartScreen) return showStartTab();
+      if (ribbonDisplayMode !== "expanded") setRibbonDisplayMode("expanded");
       $$("#ribbonTabs .tab").forEach((t) => t.classList.remove("active"));
       tab.classList.add("active");
       activeRibbonTab = tab.dataset.tab;
       renderRibbon();
     };
+    tab.ondblclick = () => {
+      setRibbonDisplayMode(ribbonDisplayMode === "expanded" ? "tabs" : "expanded");
+    };
   });
+  $("#ribbonCollapseBtn").onclick = () => {
+    const nextMode = ribbonDisplayMode === "expanded" ? "panels" : ribbonDisplayMode === "panels" ? "tabs" : "expanded";
+    setRibbonDisplayMode(nextMode);
+  };
 
   $$(".quickbar [data-tool]").forEach((b) => {
     b.onclick = () => chooseTool(b.dataset.tool);
   });
 
   $("#newBtn").onclick = async () => {
+    const reuseEmptyStartDrawing = showStartScreen && hasOnlyEmptyScratchDrawing();
     enterEditor();
-    if (await sync(invoke("new_drawing"))) updateActiveDocumentTab();
+    if (!reuseEmptyStartDrawing && await sync(invoke("new_drawing"))) updateActiveDocumentTab();
     points = [];
     pan = { x: 0, y: 0 };
     zoom = 1;
@@ -498,17 +785,181 @@ function bindShellEvents() {
   };
 
   $("#openBtn").onclick = openDrawing;
+  $("#topSaveBtn").onclick = saveDrawing;
+  $("#topUndoBtn").onclick = undoAction;
+  $("#topRedoBtn").onclick = redoAction;
   $("#startNewBtn").onclick = () => $("#newBtn").click();
   $("#startOpenBtn").onclick = openDrawing;
-  $$(".recent-drawing").forEach((button) => {
+  $("#emptyStartNew")?.addEventListener("click", () => $("#newBtn").click());
+  $("#emptyStartOpen")?.addEventListener("click", openDrawing);
+  $("#learnNewBtn")?.addEventListener("click", () => $("#newBtn").click());
+  $("#learnOpenBtn")?.addEventListener("click", openDrawing);
+  $$(".start-nav-item").forEach((button) => {
+    button.onclick = () => {
+      startPage = button.dataset.startPage;
+      $$(".start-nav-item").forEach((item) => item.classList.toggle("active", item === button));
+      $$("[data-start-content]").forEach((panel) => panel.classList.toggle("active", panel.dataset.startContent === startPage));
+    };
+  });
+  $$("[data-recent-mode]").forEach((button) => {
+    button.onclick = () => {
+      recentViewMode = button.dataset.recentMode;
+      $$("[data-recent-mode]").forEach((item) => {
+        const active = item.dataset.recentMode === recentViewMode;
+        item.classList.toggle("active", active);
+        item.setAttribute("aria-pressed", String(active));
+      });
+      $(".recent-grid")?.classList.toggle("list-view", recentViewMode === "list");
+    };
+  });
+  $$(".app-menu").forEach((menu) => {
+    menu.addEventListener("toggle", () => {
+      if (menu.open) $$(".app-menu").forEach((other) => { if (other !== menu) other.open = false; });
+    });
+  });
+  $$(".recent-actions").forEach((menu) => {
+    menu.addEventListener("toggle", () => {
+      if (menu.open) $$(".recent-actions").forEach((other) => { if (other !== menu) other.open = false; });
+    });
+  });
+  $$('[data-quick-access-toggle]').forEach((toggle) => {
+    toggle.onchange = () => {
+      const id = toggle.dataset.quickAccessToggle;
+      quickAccessVisibility[id] = toggle.checked;
+      localStorage.setItem("concostcad_quick_access", JSON.stringify(quickAccessVisibility));
+      const actionButton = document.getElementById(id);
+      if (actionButton) actionButton.hidden = !toggle.checked;
+      const hasFileActions = quickAccessVisibility.newBtn || quickAccessVisibility.openBtn;
+      const hasHistoryActions = quickAccessVisibility.topUndoBtn || quickAccessVisibility.topRedoBtn;
+      const fileDivider = $('[data-qat-divider="files"]');
+      const historyDivider = $('[data-qat-divider="history"]');
+      if (fileDivider) fileDivider.hidden = !hasFileActions || !quickAccessVisibility.topSaveBtn;
+      if (historyDivider) historyDivider.hidden = !quickAccessVisibility.topSaveBtn || !hasHistoryActions;
+    };
+  });
+  const closeMenus = () => $$(".app-menu[open]").forEach((menu) => { menu.open = false; });
+  const closeRecentActions = () => $$(".recent-actions[open]").forEach((menu) => { menu.open = false; });
+  if (!menuDismissBound) {
+    menuDismissBound = true;
+    document.addEventListener("pointerdown", (event) => {
+      if (!event.target.closest(".app-menu")) closeMenus();
+      if (!event.target.closest(".recent-actions")) closeRecentActions();
+    });
+  }
+  const menuAction = (id, action) => {
+    const button = document.getElementById(id);
+    if (button) button.onclick = () => { closeMenus(); action(); };
+  };
+  const cubeFace = $("#viewCube .cube-top-face");
+  cubeFace?.style.setProperty("transform", `rotate(${-viewRotation}rad)`);
+  const cubeHeading = ({ 0: "N", [Math.PI / 2]: "E", [Math.PI]: "S", [-Math.PI / 2]: "W" })[viewRotation];
+  $$("[data-cube-heading]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.cubeHeading === cubeHeading));
+  });
+  menuAction("menuNewDrawing", () => $("#newBtn").click());
+  menuAction("menuOpenDrawing", openDrawing);
+  menuAction("menuSaveDrawing", saveDrawing);
+  menuAction("menuSaveAsDrawing", saveDrawingAs);
+  menuAction("menuFileCloseDrawing", closeCurrentDrawing);
+  menuAction("menuCloseDrawing", closeCurrentDrawing);
+  menuAction("menuCloseAllDrawings", async () => {
+    for (const drawing of [...openDocuments]) {
+      if (!await closeDocumentTab(drawing.id)) break;
+    }
+  });
+  menuAction("menuExit", () => $("#closeBtn").click());
+  menuAction("menuToggleProperties", () => setPaletteVisibility("properties", !paletteVisibility.properties));
+  menuAction("menuToggleLayers", () => setPaletteVisibility("layers", !paletteVisibility.layers));
+  menuAction("menuKeyboardHelp", () => {
+    setStatus(currentLang === "vi" ? "L: LINE · PL: PLINE · C: CIRCLE · E: ERASE · Ctrl+S: SAVE · F3: OSNAP · F8: ORTHO" : "L: LINE · PL: PLINE · C: CIRCLE · E: ERASE · Ctrl+S: SAVE · F3: OSNAP · F8: ORTHO");
+    $("#commandInput")?.focus();
+  });
+  menuAction("menuHelp", () => setStatus(currentLang === "vi" ? "Trợ giúp: nhập lệnh ở dòng lệnh phía dưới hoặc chọn công cụ trên ribbon." : "Help: enter commands on the command line or choose a tool from the ribbon."));
+  menuAction("menuAbout", () => setStatus("CONCOSTCAD · Rust Edition 2.0 · 2D Drafting"));
+  $$("[data-menu-recent]").forEach((button) => {
+    button.onclick = () => { closeMenus(); openDrawing(button.dataset.menuRecent); };
+  });
+  $$("[data-menu-window-doc]").forEach((button) => {
+    button.onclick = async () => {
+      closeMenus();
+      const id = Number(button.dataset.menuWindowDoc);
+      if (showStartScreen) enterEditor();
+      if (id !== activeDocId && await sync(invoke("switch_drawing", { id }))) {
+        selectedHandles.clear();
+        points = [];
+        chooseTool("select");
+      }
+    };
+  });
+  $$(".recent-open").forEach((button) => {
     button.onclick = () => openDrawing(button.dataset.recentPath);
+  });
+  $$('[data-remove-recent]').forEach((button) => {
+    button.onclick = () => {
+      const path = button.dataset.removeRecent;
+      try {
+        localStorage.setItem("concostcad_recent_drawings", JSON.stringify(getRecentDrawings().filter((item) => item !== path)));
+        const previews = JSON.parse(localStorage.getItem("concostcad_recent_previews") || "{}");
+        if (previews && typeof previews === "object") {
+          delete previews[path];
+          localStorage.setItem("concostcad_recent_previews", JSON.stringify(previews));
+        }
+      } catch (_) {
+        setStatus(currentLang === "vi" ? "Không thể cập nhật danh sách gần đây" : "Could not update recent drawings");
+        return;
+      }
+      showStartTab();
+    };
   });
   $("#toggleGridBtn").onclick = toggleGrid;
   $("#toggleSnapBtn").onclick = toggleSnap;
   $("#toggleOrthoBtn").onclick = toggleOrtho;
+  $("#navZoomExtents").onclick = zoomToExtents;
+  $("#navZoomIn").onclick = () => { zoom *= 1.25; draw(); };
+  $("#navZoomOut").onclick = () => { zoom /= 1.25; draw(); };
+  $$("[data-cube-heading]").forEach((button) => {
+    button.onclick = () => setViewHeading(button.dataset.cubeHeading);
+  });
+  $("#cubeTopButton").onclick = () => setViewHeading("N");
+  $("#toggleProperties").onclick = () => togglePaletteCollapsed("properties");
+  $("#toggleLayers").onclick = () => togglePaletteCollapsed("layers");
+  $("#hideProperties").onclick = () => setPaletteVisibility("properties", false);
+  $("#hideLayers").onclick = () => setPaletteVisibility("layers", false);
+  bindPaletteSplitter();
+  bindPaletteWidthSplitter();
+  bindCommandbarSplitter();
 
   const appWindow = getCurrentWindow();
   appWindowRef = appWindow;
+  const requestWindowClose = async () => {
+    if (windowCloseAllowed || closeConfirmationPending) return;
+    closeConfirmationPending = true;
+    try {
+      if (openDocuments.some((drawing) => drawing.dirty)) {
+        const message = currentLang === "vi"
+          ? "Có bản vẽ chưa được lưu. Bạn có muốn đóng mà không lưu không?"
+          : "Some drawings have unsaved changes. Close without saving?";
+        const confirmed = await ask(message, {
+          title: "CONCOSTCAD",
+          kind: "warning",
+          okLabel: currentLang === "vi" ? "Đóng không lưu" : "Close without saving",
+          cancelLabel: currentLang === "vi" ? "Hủy" : "Cancel",
+        });
+        if (!confirmed) {
+          setStatus(t("ready_status"));
+          return;
+        }
+      }
+      windowCloseAllowed = true;
+      await appWindow.destroy();
+    } catch (error) {
+      windowCloseAllowed = false;
+      console.error("Failed to close the application window", error);
+      setStatus(`${currentLang === "vi" ? "Không thể đóng cửa sổ" : "Could not close window"}: ${String(error)}`);
+    } finally {
+      closeConfirmationPending = false;
+    }
+  };
   $("#minimizeBtn").onclick = async (event) => {
     event.stopPropagation();
     await appWindow.minimize();
@@ -519,17 +970,15 @@ function bindShellEvents() {
   };
   $("#closeBtn").onclick = async (event) => {
     event.stopPropagation();
-    await appWindow.close();
+    setStatus(currentLang === "vi" ? "Đang đóng cửa sổ..." : "Closing window...");
+    await requestWindowClose();
   };
   if (!closeGuardBound) {
     closeGuardBound = true;
-    appWindow.onCloseRequested(async (event) => {
-      if (!model.dirty) return;
+    appWindow.onCloseRequested((event) => {
+      if (windowCloseAllowed || !openDocuments.some((drawing) => drawing.dirty)) return;
       event.preventDefault();
-      const message = currentLang === "vi"
-        ? "Bản vẽ chưa được lưu. Bạn có muốn đóng mà không lưu không?"
-        : "This drawing has unsaved changes. Close without saving?";
-      if (window.confirm(message)) await appWindow.close();
+      void requestWindowClose();
     });
   }
 
@@ -564,9 +1013,9 @@ function bindShellEvents() {
 
   bindCanvasEvents(viewportEl, canvasEl);
 
-  $(".layout-tab").forEach((btn) => {
+  $$(".layout-tab").forEach((btn) => {
     btn.onclick = () => {
-      $(".layout-tab").forEach((b) => b.classList.remove("active"));
+      $$(".layout-tab").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       activeSpace = btn.dataset.space;
       setStatus(activeSpace === "model" ? "Không gian mô hình (Model Space)" : `Không gian giấy (Paper Space - ${activeSpace.toUpperCase()})`);
@@ -583,7 +1032,7 @@ function bindShellEvents() {
       newBtn.dataset.space = `layout${num}`;
       newBtn.textContent = `Layout${num}`;
       newBtn.onclick = () => {
-        $(".layout-tab").forEach((b) => b.classList.remove("active"));
+        $$(".layout-tab").forEach((b) => b.classList.remove("active"));
         newBtn.classList.add("active");
         activeSpace = newBtn.dataset.space;
         setStatus(`Không gian giấy (Paper Space - ${activeSpace.toUpperCase()})`);
@@ -596,18 +1045,183 @@ function bindShellEvents() {
   bindCommandBarEvents();
 }
 
+function hasOnlyEmptyScratchDrawing() {
+  return openDocuments.length === 1
+    && /^Drawing\d+$/i.test(openDocuments[0].title)
+    && model.entityCount === 0
+    && !model.dirty
+    && !openDocuments[0].dirty;
+}
+
 function enterEditor() {
   showStartScreen = false;
   activeRibbonTab = "home";
   $$("#ribbonTabs .tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === activeRibbonTab));
-  renderRibbon();
   const start = $("#startScreen");
   if (start) start.remove();
+  renderRibbon();
+  renderDocumentTabs();
+  render();
+}
+
+function refreshPalette(name) {
+  const panel = $(`.panel.${name}`);
+  if (!panel) return;
+  panel.classList.toggle("palette-hidden", !paletteVisibility[name]);
+  panel.classList.toggle("collapsed", paletteCollapsed[name]);
+  const toggle = $(`#toggle${name === "properties" ? "Properties" : "Layers"}`);
+  if (toggle) {
+    const label = name === "properties" ? "Properties" : "Layers";
+    const action = paletteCollapsed[name] ? "Expand" : "Collapse";
+    toggle.textContent = paletteCollapsed[name] ? "›" : "⌄";
+    toggle.title = `${action} ${label}`;
+    toggle.setAttribute("aria-label", `${action} ${label}`);
+    toggle.setAttribute("aria-expanded", String(!paletteCollapsed[name]));
+  }
+  const sidepanels = $(".sidepanels");
+  if (sidepanels) sidepanels.classList.toggle("empty", !Object.values(paletteVisibility).some(Boolean));
+  const splitter = $("#paletteSplitter");
+  if (splitter) splitter.hidden = !paletteVisibility.properties || !paletteVisibility.layers || paletteCollapsed.properties || paletteCollapsed.layers;
+  const widthSplitter = $("#paletteWidthSplitter");
+  if (widthSplitter) widthSplitter.hidden = !Object.values(paletteVisibility).some(Boolean);
+}
+
+function togglePaletteCollapsed(name) {
+  paletteCollapsed[name] = !paletteCollapsed[name];
+  refreshPalette(name);
+}
+
+function setPaletteVisibility(name, visible) {
+  paletteVisibility[name] = visible;
+  refreshPalette(name);
+  renderRibbon();
+}
+
+function bindPaletteSplitter() {
+  const splitter = $("#paletteSplitter");
+  const sidepanels = $(".sidepanels");
+  if (!splitter || !sidepanels) return;
+
+  const applyHeight = (nextHeight, persist = false) => {
+    const maxHeight = Math.max(150, sidepanels.clientHeight - 150);
+    propertiesPanelHeight = Math.round(Math.min(maxHeight, Math.max(150, nextHeight)));
+    sidepanels.style.setProperty("--properties-panel-height", `${propertiesPanelHeight}px`);
+    splitter.setAttribute("aria-valuenow", String(propertiesPanelHeight));
+    if (persist) localStorage.setItem("concostcad_properties_height", String(propertiesPanelHeight));
+  };
+  applyHeight(propertiesPanelHeight);
+
+  splitter.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = $(".panel.properties")?.getBoundingClientRect().height ?? propertiesPanelHeight;
+    document.body.classList.add("resizing-palette");
+    const move = (pointerEvent) => applyHeight(startHeight + pointerEvent.clientY - startY);
+    const finish = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", finish);
+      document.removeEventListener("pointercancel", finish);
+      document.body.classList.remove("resizing-palette");
+      applyHeight(propertiesPanelHeight, true);
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", finish, { once: true });
+    document.addEventListener("pointercancel", finish, { once: true });
+  });
+
+  splitter.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    applyHeight(propertiesPanelHeight + (event.key === "ArrowDown" ? 16 : -16), true);
+  });
+}
+
+function bindPaletteWidthSplitter() {
+  const splitter = $("#paletteWidthSplitter");
+  const sidepanels = $(".sidepanels");
+  const workspace = $(".workspace");
+  if (!splitter || !sidepanels || !workspace) return;
+
+  const applyWidth = (nextWidth, persist = false) => {
+    const maxWidth = Math.max(220, Math.min(520, workspace.clientWidth - 500));
+    sidepanelsWidth = Math.round(Math.min(maxWidth, Math.max(220, nextWidth)));
+    sidepanels.style.setProperty("--sidepanels-width", `${sidepanelsWidth}px`);
+    splitter.setAttribute("aria-valuenow", String(sidepanelsWidth));
+    if (persist) localStorage.setItem("concostcad_sidepanels_width", String(sidepanelsWidth));
+  };
+  applyWidth(sidepanelsWidth);
+
+  splitter.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = sidepanels.getBoundingClientRect().width;
+    document.body.classList.add("resizing-palette-width");
+    const move = (pointerEvent) => applyWidth(startWidth + startX - pointerEvent.clientX);
+    const finish = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", finish);
+      document.removeEventListener("pointercancel", finish);
+      document.body.classList.remove("resizing-palette-width");
+      applyWidth(sidepanelsWidth, true);
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", finish, { once: true });
+    document.addEventListener("pointercancel", finish, { once: true });
+  });
+
+  splitter.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    applyWidth(sidepanelsWidth + (event.key === "ArrowLeft" ? 16 : -16), true);
+  });
+}
+
+function bindCommandbarSplitter() {
+  const splitter = $("#commandbarSplitter");
+  const commandbar = $(".commandbar");
+  const app = $("#app");
+  if (!splitter || !commandbar || !app) return;
+
+  const applyHeight = (nextHeight, persist = false) => {
+    const maxHeight = Math.max(56, Math.min(260, app.clientHeight - 340));
+    commandbarHeight = Math.round(Math.min(maxHeight, Math.max(56, nextHeight)));
+    commandbar.style.setProperty("--commandbar-height", `${commandbarHeight}px`);
+    splitter.setAttribute("aria-valuenow", String(commandbarHeight));
+    if (persist) localStorage.setItem("concostcad_commandbar_height", String(commandbarHeight));
+  };
+  applyHeight(commandbarHeight);
+
+  splitter.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = commandbar.getBoundingClientRect().height;
+    document.body.classList.add("resizing-commandbar");
+    const move = (pointerEvent) => applyHeight(startHeight + startY - pointerEvent.clientY);
+    const finish = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", finish);
+      document.removeEventListener("pointercancel", finish);
+      document.body.classList.remove("resizing-commandbar");
+      applyHeight(commandbarHeight, true);
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", finish, { once: true });
+    document.addEventListener("pointercancel", finish, { once: true });
+  });
+
+  splitter.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    applyHeight(commandbarHeight + (event.key === "ArrowUp" ? 16 : -16), true);
+  });
 }
 
 function showStartTab() {
   showStartScreen = true;
-  activeRibbonTab = "start";
+  activeRibbonTab = "home";
   renderShell();
   new ResizeObserver(resize).observe($("#viewport"));
   resize();
@@ -615,16 +1229,27 @@ function showStartTab() {
   render();
 }
 
-function closeCurrentDrawing() {
-  if (model.dirty) {
+async function closeDocumentTab(id) {
+  const drawing = openDocuments.find((document) => document.id === id);
+  if (!drawing) return false;
+  if (drawing.dirty) {
     const message = currentLang === "vi"
       ? "Bản vẽ chưa được lưu. Đóng bản vẽ không lưu?"
       : "This drawing has unsaved changes. Close without saving?";
     if (!window.confirm(message)) return false;
   }
-  showStartTab();
-  setStatus(currentLang === "vi" ? "Đã đóng bản vẽ · Start" : "Drawing closed · Start");
+  const closingLast = openDocuments.length === 1;
+  if (!await sync(invoke("close_drawing", { id, discard: true }))) return false;
+  selectedHandles.clear();
+  points = [];
+  if (closingLast) showStartTab();
+  else chooseTool("select");
+  setStatus(currentLang === "vi" ? "Đã đóng bản vẽ" : "Drawing closed");
   return true;
+}
+
+async function closeCurrentDrawing() {
+  return closeDocumentTab(activeDocId);
 }
 
 function updateActiveDocumentTab() {
@@ -734,132 +1359,118 @@ function renderCommandLog() {
 // Coordinate Transforms
 function worldToScreen(x, y) {
   const canvas = $("#cadCanvas");
+  const cos = Math.cos(viewRotation), sin = Math.sin(viewRotation);
+  const viewX = x * cos - y * sin;
+  const viewY = x * sin + y * cos;
   return {
-    x: canvas.clientWidth / 2 + pan.x + x * zoom,
-    y: canvas.clientHeight / 2 + pan.y - y * zoom
+    x: canvas.clientWidth / 2 + pan.x + viewX * zoom,
+    y: canvas.clientHeight / 2 + pan.y - viewY * zoom
   };
 }
 
 function screenToWorld(x, y) {
   const canvas = $("#cadCanvas");
+  const cos = Math.cos(viewRotation), sin = Math.sin(viewRotation);
+  const viewX = (x - canvas.clientWidth / 2 - pan.x) / zoom;
+  const viewY = -(y - canvas.clientHeight / 2 - pan.y) / zoom;
   return {
-    x: (x - canvas.clientWidth / 2 - pan.x) / zoom,
-    y: -(y - canvas.clientHeight / 2 - pan.y) / zoom
+    x: viewX * cos + viewY * sin,
+    y: -viewX * sin + viewY * cos
   };
 }
 
+function setViewHeading(heading) {
+  const angles = { N: 0, E: Math.PI / 2, S: Math.PI, W: -Math.PI / 2 };
+  const nextRotation = angles[heading];
+  if (nextRotation === undefined) return;
+  const canvas = $("#cadCanvas");
+  if (!canvas) return;
+  // Keep the world point under the viewport center fixed while rotating.
+  const target = screenToWorld(canvas.clientWidth / 2, canvas.clientHeight / 2);
+  viewRotation = nextRotation;
+  const cos = Math.cos(viewRotation), sin = Math.sin(viewRotation);
+  const viewX = target.x * cos - target.y * sin;
+  const viewY = target.x * sin + target.y * cos;
+  pan.x = -viewX * zoom;
+  pan.y = viewY * zoom;
+  const cube = $("#viewCube");
+  cube?.querySelector(".cube-top-face")?.style.setProperty("transform", `rotate(${-viewRotation}rad)`);
+  cube?.querySelectorAll("[data-cube-heading]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.cubeHeading === heading));
+  });
+  draw();
+}
+
+function fitWorldBounds(minX, maxX, minY, maxY, padding = 80) {
+  const canvas = $("#cadCanvas");
+  if (!canvas) return;
+  const cos = Math.cos(viewRotation), sin = Math.sin(viewRotation);
+  const corners = [
+    { x: minX, y: minY }, { x: minX, y: maxY },
+    { x: maxX, y: minY }, { x: maxX, y: maxY }
+  ].map(({ x, y }) => ({ x: x * cos - y * sin, y: x * sin + y * cos }));
+  const left = Math.min(...corners.map((p) => p.x));
+  const right = Math.max(...corners.map((p) => p.x));
+  const bottom = Math.min(...corners.map((p) => p.y));
+  const top = Math.max(...corners.map((p) => p.y));
+  const spanX = Math.max(1, right - left);
+  const spanY = Math.max(1, top - bottom);
+  zoom = Math.max(0.0001, Math.min((canvas.clientWidth - padding * 2) / spanX, (canvas.clientHeight - padding * 2) / spanY));
+  pan.x = -((left + right) / 2) * zoom;
+  pan.y = ((bottom + top) / 2) * zoom;
+}
+
 // Bulge Geometry
+const MAX_ARC_TESSELLATION_SEGMENTS = 2048;
+
+function arcTessellationSegments(sweep, radius, targetPixelStep, minimum = 8) {
+  if (![sweep, radius, zoom, targetPixelStep].every(Number.isFinite) || targetPixelStep <= 0) {
+    return minimum;
+  }
+  const projectedLength = Math.abs(sweep) * Math.abs(radius) * Math.max(0, zoom);
+  if (!Number.isFinite(projectedLength)) return MAX_ARC_TESSELLATION_SEGMENTS;
+  return Math.min(
+    MAX_ARC_TESSELLATION_SEGMENTS,
+    Math.max(minimum, Math.ceil(projectedLength / targetPixelStep))
+  );
+}
+
 function bulgeGeometry(p1, p2, bulge) {
-  if (Math.abs(bulge) < 1e-10) return null;
+  if (!Number.isFinite(bulge) || Math.abs(bulge) < 1e-10) return null;
   const dx = p2.x - p1.x;
   const dy = p2.y - p1.y;
   const chord = Math.hypot(dx, dy);
-  if (chord < 1e-10) return null;
+  if (!Number.isFinite(chord) || chord === 0) return null;
   const sweep = 4 * Math.atan(bulge);
-  const radius = chord / (2 * Math.sin(Math.abs(sweep) / 2));
-  const offset = chord / (2 * Math.tan(sweep / 2));
+  const sinHalfSweep = Math.sin(Math.abs(sweep) / 2);
+  const tanHalfSweep = Math.tan(sweep / 2);
+  if (Math.abs(sinHalfSweep) <= 1e-12 || Math.abs(tanHalfSweep) <= 1e-12) return null;
+  const radius = chord / (2 * sinHalfSweep);
+  const offset = chord / (2 * tanHalfSweep);
   const center = {
     x: (p1.x + p2.x) * 0.5 - (dy / chord) * offset,
     y: (p1.y + p2.y) * 0.5 + (dx / chord) * offset
   };
+  if (![radius, offset, center.x, center.y].every(Number.isFinite) || radius <= 0) return null;
   const startAngle = Math.atan2(p1.y - center.y, p1.x - center.x);
   return { center, radius, startAngle, sweep };
 }
 
-function pointSegmentDist(px, py, x1, y1, x2, y2) {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const d2 = dx * dx + dy * dy;
-  if (d2 === 0) return Math.hypot(px - x1, py - y1);
-  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / d2));
-  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
-}
-
-function normalizeAngle(a) {
-  return (a % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
-}
-
-function isAngleBetween(target, start, end) {
-  const normTarget = normalizeAngle(target);
-  const normStart = normalizeAngle(start);
-  const normEnd = normalizeAngle(end);
-  const sweep = normalizeAngle(normEnd - normStart);
-  const targetSweep = normalizeAngle(normTarget - normStart);
-  return targetSweep <= sweep;
-}
-
-// Hit-testing single entity
-function hitTestEntity(worldPoint, tolerance) {
-  let closest = null;
-  let minDistance = tolerance;
-
-  for (const e of model.entities) {
-    const layerObj = model.layers.find((l) => l.name === e.layer);
-    if (layerObj && (layerObj.off || layerObj.frozen)) continue;
-
-    let dist = Infinity;
-    if (e.kind === "circle") {
-      const dCenter = Math.hypot(worldPoint.x - e.cx, worldPoint.y - e.cy);
-      if (Math.abs(dCenter - e.radius) <= tolerance) {
-        dist = Math.abs(dCenter - e.radius);
-      }
-    } else if (e.kind === "text") {
-      const estW = (e.text || "").length * (e.height || 2.5) * 0.6;
-      const h = e.height || 2.5;
-      if (worldPoint.x >= e.x - tolerance && worldPoint.x <= e.x + estW + tolerance &&
-          worldPoint.y >= e.y - h - tolerance && worldPoint.y <= e.y + tolerance) {
-        dist = 0;
-      }
-    } else if (e.kind === "insert") {
-      const sx = Math.abs(e.scaleX || 1);
-      const sy = Math.abs(e.scaleY || 1);
-      const boxSize = Math.max(12, 20 * Math.max(sx, sy)) / zoom;
-      const d = Math.hypot(worldPoint.x - e.x, worldPoint.y - e.y);
-      if (d <= Math.max(tolerance, boxSize / 2)) {
-        dist = d;
-      }
-    } else if (e.kind === "line") {
-      dist = pointSegmentDist(worldPoint.x, worldPoint.y, e.x1, e.y1, e.x2, e.y2);
-    } else if (e.kind === "arc") {
-      const dCenter = Math.hypot(worldPoint.x - e.x, worldPoint.y - e.y);
-      const angle = Math.atan2(worldPoint.y - e.y, worldPoint.x - e.x);
-      if (Math.abs(dCenter - e.radius) <= tolerance && isAngleBetween(angle, e.start, e.end)) {
-        dist = Math.abs(dCenter - e.radius);
-      }
-    } else if (e.kind === "polyline") {
-      const pts = e.points;
-      const n = e.closed ? pts.length : pts.length - 1;
-      for (let i = 0; i < n; i++) {
-        const a = pts[i];
-        const b = pts[(i + 1) % pts.length];
-        const bulge = a.bulge || 0;
-        if (Math.abs(bulge) >= 1e-6) {
-          const geom = bulgeGeometry(a, b, bulge);
-          if (geom) {
-            const dCenter = Math.hypot(worldPoint.x - geom.center.x, worldPoint.y - geom.center.y);
-            const angle = Math.atan2(worldPoint.y - geom.center.y, worldPoint.x - geom.center.x);
-            const endAngle = geom.startAngle + geom.sweep;
-            if (Math.abs(dCenter - geom.radius) <= tolerance) {
-              const startA = geom.sweep > 0 ? geom.startAngle : endAngle;
-              const endA = geom.sweep > 0 ? endAngle : geom.startAngle;
-              if (isAngleBetween(angle, startA, endA)) {
-                dist = Math.min(dist, Math.abs(dCenter - geom.radius));
-              }
-            }
-          }
-        } else {
-          dist = Math.min(dist, pointSegmentDist(worldPoint.x, worldPoint.y, a.x, a.y, b.x, b.y));
-        }
-      }
-    }
-
-    if (dist < minDistance) {
-      minDistance = dist;
-      closest = e;
-    }
+// Use Rust geometry as the picking oracle; selection is queried only on click,
+// while pointer-move rendering remains local and responsive.
+async function hitTestEntity(worldPoint, tolerance) {
+  try {
+    const handle = await invoke("hit_test_entity", {
+      x: worldPoint.x,
+      y: worldPoint.y,
+      tolerance,
+      zoom
+    });
+    return handle == null ? null : model.entities.find((entity) => entity.handle === handle) || null;
+  } catch (error) {
+    setStatus(String(error));
+    return null;
   }
-
-  return closest;
 }
 
 // Bounding Box computation for entities (for Culling and Box Selection)
@@ -907,6 +1518,14 @@ function getEntityBounds(e) {
     };
   }
   if (e.kind === "polyline") {
+    if (e.bounds && [e.bounds.minX, e.bounds.maxX, e.bounds.minY, e.bounds.maxY].every(Number.isFinite)) {
+      return {
+        minX: e.bounds.minX,
+        maxX: e.bounds.maxX,
+        minY: e.bounds.minY,
+        maxY: e.bounds.maxY
+      };
+    }
     const xs = e.points.map((p) => p.x);
     const ys = e.points.map((p) => p.y);
     return {
@@ -991,11 +1610,84 @@ function findNearestGrip(worldPoint, pixelTol = 8) {
 }
 
 // Snap Detection
+function snapAngleOnSweep(angle, start, sweep) {
+  const tau = Math.PI * 2;
+  const positive = (value) => ((value % tau) + tau) % tau;
+  if (Math.abs(sweep) >= tau - 1e-9) return true;
+  return sweep >= 0
+    ? positive(angle - start) <= sweep + 1e-9
+    : positive(start - angle) <= -sweep + 1e-9;
+}
+
+function snapLineArcIntersections(segment, arc) {
+  const dx = segment.b.x - segment.a.x;
+  const dy = segment.b.y - segment.a.y;
+  const length = Math.hypot(dx, dy);
+  if (!Number.isFinite(length) || length === 0) return [];
+  const ux = dx / length;
+  const uy = dy / length;
+  const fx = segment.a.x - arc.center.x;
+  const fy = segment.a.y - arc.center.y;
+  const alongCenter = -(fx * ux + fy * uy);
+  const perpendicular = fx * uy - fy * ux;
+  if (![alongCenter, perpendicular].every(Number.isFinite)) return [];
+  const radialTolerance = Math.max(arc.radius, Math.abs(perpendicular)) * 16 * Number.EPSILON;
+  if (Math.abs(perpendicular) - arc.radius > radialTolerance) return [];
+  const ratio = Math.min(1, Math.abs(perpendicular) / arc.radius);
+  const halfChord = arc.radius * Math.sqrt(Math.max(0, 1 - ratio * ratio));
+  const distances = halfChord <= radialTolerance
+    ? [alongCenter]
+    : [alongCenter - halfChord, alongCenter + halfChord];
+  const points = [];
+  for (const along of distances) {
+    const t = along / length;
+    if (!Number.isFinite(t) || t < -1e-12 || t > 1 + 1e-12) continue;
+    const point = { x: segment.a.x + along * ux, y: segment.a.y + along * uy };
+    const angle = Math.atan2(point.y - arc.center.y, point.x - arc.center.x);
+    if ([point.x, point.y].every(Number.isFinite) && snapAngleOnSweep(angle, arc.startAngle, arc.sweep)) {
+      points.push(point);
+    }
+  }
+  return points;
+}
+
+function snapArcArcIntersections(first, second) {
+  const dx = second.center.x - first.center.x;
+  const dy = second.center.y - first.center.y;
+  const distance = Math.hypot(dx, dy);
+  if (!Number.isFinite(distance) || distance === 0) return [];
+  const scale = Math.max(first.radius, second.radius, distance);
+  const tolerance = scale * 16 * Number.EPSILON;
+  if (distance > first.radius + second.radius + tolerance
+    || distance < Math.abs(first.radius - second.radius) - tolerance) return [];
+
+  const along = (first.radius * first.radius - second.radius * second.radius + distance * distance) / (2 * distance);
+  const heightSquared = first.radius * first.radius - along * along;
+  const squaredTolerance = Math.max(first.radius * first.radius, along * along) * 32 * Number.EPSILON;
+  if (!Number.isFinite(heightSquared) || heightSquared < -squaredTolerance) return [];
+  const height = Math.sqrt(Math.max(0, heightSquared));
+  const baseX = first.center.x + along * dx / distance;
+  const baseY = first.center.y + along * dy / distance;
+  const offsetX = -dy * height / distance;
+  const offsetY = dx * height / distance;
+  const candidates = height <= tolerance
+    ? [{ x: baseX, y: baseY }]
+    : [{ x: baseX + offsetX, y: baseY + offsetY }, { x: baseX - offsetX, y: baseY - offsetY }];
+  return candidates.filter((point) => {
+    if (![point.x, point.y].every(Number.isFinite)) return false;
+    const firstAngle = Math.atan2(point.y - first.center.y, point.x - first.center.x);
+    const secondAngle = Math.atan2(point.y - second.center.y, point.x - second.center.x);
+    return snapAngleOnSweep(firstAngle, first.startAngle, first.sweep)
+      && snapAngleOnSweep(secondAngle, second.startAngle, second.sweep);
+  });
+}
+
 function findNearestSnap(p, pixelRadius = 14) {
   if (!snapEnabled) return null;
   const tol = pixelRadius / zoom;
   let best = null;
   let bestDist = tol;
+  const nearbySegments = [];
 
   const consider = (pt, kind) => {
     const d = Math.hypot(p.x - pt.x, p.y - pt.y);
@@ -1003,6 +1695,20 @@ function findNearestSnap(p, pixelRadius = 14) {
       bestDist = d;
       best = { point: pt, kind };
     }
+  };
+
+  const collectLinearSegment = (a, b, owner, segmentIndex) => {
+    if (![a.x, a.y, b.x, b.y].every(Number.isFinite)) return;
+    if (Math.max(a.x, b.x) < p.x - tol || Math.min(a.x, b.x) > p.x + tol
+      || Math.max(a.y, b.y) < p.y - tol || Math.min(a.y, b.y) > p.y + tol) return;
+    nearbySegments.push({ kind: "line", a, b, owner, segmentIndex });
+  };
+
+  const collectArc = (center, radius, startAngle, sweep, owner, segmentIndex) => {
+    if (![center.x, center.y, radius, startAngle, sweep].every(Number.isFinite) || radius <= 0) return;
+    if (center.x + radius < p.x - tol || center.x - radius > p.x + tol
+      || center.y + radius < p.y - tol || center.y - radius > p.y + tol) return;
+    nearbySegments.push({ kind: "arc", center, radius, startAngle, sweep, owner, segmentIndex });
   };
 
   for (const e of model.entities) {
@@ -1013,16 +1719,19 @@ function findNearestSnap(p, pixelRadius = 14) {
       consider({ x: e.x1, y: e.y1 }, "endpoint");
       consider({ x: e.x2, y: e.y2 }, "endpoint");
       consider({ x: (e.x1 + e.x2) / 2, y: (e.y1 + e.y2) / 2 }, "midpoint");
+      collectLinearSegment({ x: e.x1, y: e.y1 }, { x: e.x2, y: e.y2 }, e.handle, 0);
     } else if (e.kind === "arc") {
       consider({ x: e.x, y: e.y }, "center");
       consider({ x: e.x + e.radius * Math.cos(e.start), y: e.y + e.radius * Math.sin(e.start) }, "endpoint");
       consider({ x: e.x + e.radius * Math.cos(e.end), y: e.y + e.radius * Math.sin(e.end) }, "endpoint");
+      collectArc({ x: e.x, y: e.y }, e.radius, e.start, ((e.end - e.start) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2), e.handle, 0);
     } else if (e.kind === "circle") {
       consider({ x: e.cx, y: e.cy }, "center");
       consider({ x: e.cx + e.radius, y: e.cy }, "endpoint");
       consider({ x: e.cx - e.radius, y: e.cy }, "endpoint");
       consider({ x: e.cx, y: e.cy + e.radius }, "endpoint");
       consider({ x: e.cx, y: e.cy - e.radius }, "endpoint");
+      collectArc({ x: e.cx, y: e.cy }, e.radius, 0, Math.PI * 2, e.handle, 0);
     } else if (e.kind === "insert" || e.kind === "text") {
       consider({ x: e.x, y: e.y }, "endpoint");
     } else if (e.kind === "polyline") {
@@ -1030,8 +1739,66 @@ function findNearestSnap(p, pixelRadius = 14) {
         consider(e.points[i], "endpoint");
         if (i < e.points.length - 1 || e.closed) {
           const next = e.points[(i + 1) % e.points.length];
-          consider({ x: (e.points[i].x + next.x) / 2, y: (e.points[i].y + next.y) / 2 }, "midpoint");
+          const bulge = e.points[i].bulge || 0;
+          if (Math.abs(bulge) >= 1e-10) {
+            const arc = bulgeGeometry(e.points[i], next, bulge);
+            if (arc) {
+              const angle = arc.startAngle + arc.sweep / 2;
+              consider({
+                x: arc.center.x + arc.radius * Math.cos(angle),
+                y: arc.center.y + arc.radius * Math.sin(angle)
+              }, "midpoint");
+              collectArc(arc.center, arc.radius, arc.startAngle, arc.sweep, e.handle, i);
+            }
+          } else {
+            consider({ x: (e.points[i].x + next.x) / 2, y: (e.points[i].y + next.y) / 2 }, "midpoint");
+            collectLinearSegment(e.points[i], next, e.handle, i);
+          }
         }
+      }
+    }
+  }
+
+  // Intersection snap is evaluated only for primitives near the cursor;
+  // this avoids an all-entities pair scan on every pointer move.
+  for (let i = 0; i < nearbySegments.length; i++) {
+    const first = nearbySegments[i];
+
+    for (let j = i + 1; j < nearbySegments.length; j++) {
+      const second = nearbySegments[j];
+      if (first.owner === second.owner && Math.abs(first.segmentIndex - second.segmentIndex) <= 1) continue;
+      let intersections = [];
+      if (first.kind === "line" && second.kind === "line") {
+        const rx = first.b.x - first.a.x;
+        const ry = first.b.y - first.a.y;
+        const sx = second.b.x - second.a.x;
+        const sy = second.b.y - second.a.y;
+        const rLength = Math.hypot(rx, ry);
+        const sLength = Math.hypot(sx, sy);
+        if (!Number.isFinite(rLength) || !Number.isFinite(sLength) || rLength === 0 || sLength === 0) continue;
+        const ux = rx / rLength;
+        const uy = ry / rLength;
+        const vx = sx / sLength;
+        const vy = sy / sLength;
+        const sinAngle = ux * vy - uy * vx;
+        if (!Number.isFinite(sinAngle) || Math.abs(sinAngle) <= 1e-12) continue;
+        const qx = second.a.x - first.a.x;
+        const qy = second.a.y - first.a.y;
+        const alongFirst = (qx * vy - qy * vx) / sinAngle;
+        const alongSecond = (qx * uy - qy * ux) / sinAngle;
+        const t = alongFirst / rLength;
+        const u = alongSecond / sLength;
+        if (![t, u, alongFirst].every(Number.isFinite) || t < 0 || t > 1 || u < 0 || u > 1) continue;
+        intersections = [{ x: first.a.x + alongFirst * ux, y: first.a.y + alongFirst * uy }];
+      } else if (first.kind === "line") {
+        intersections = snapLineArcIntersections(first, second);
+      } else if (second.kind === "line") {
+        intersections = snapLineArcIntersections(second, first);
+      } else {
+        intersections = snapArcArcIntersections(first, second);
+      }
+      for (const intersection of intersections) {
+        consider(intersection, "intersection");
       }
     }
   }
@@ -1072,7 +1839,7 @@ function drawPolyline(pts, closed, isSelected, layerColor = "#79c9dc") {
     if (Math.abs(bulge) >= 1e-6) {
       const geom = bulgeGeometry(a, b, bulge);
       if (geom) {
-        const steps = Math.max(8, Math.ceil(Math.abs(geom.sweep) * geom.radius * zoom / 10));
+        const steps = arcTessellationSegments(geom.sweep, geom.radius, 10, 8);
         for (let s = 1; s <= steps; s++) {
           const angle = geom.startAngle + (geom.sweep * s) / steps;
           const p = worldToScreen(
@@ -1182,44 +1949,53 @@ function draw() {
 
   // Draw Grid
   if (showGrid) {
-    const step = 50 * zoom;
-    const base = worldToScreen(0, 0);
-    const gridStep = step < 12 ? step * 5 : step;
-    if (gridStep > 3 && gridStep < 400) {
+    const corners = [screenToWorld(0, 0), screenToWorld(w, 0), screenToWorld(0, h), screenToWorld(w, h)];
+    const minX = Math.min(...corners.map((p) => p.x)), maxX = Math.max(...corners.map((p) => p.x));
+    const minY = Math.min(...corners.map((p) => p.y)), maxY = Math.max(...corners.map((p) => p.y));
+    let gridStep = 50;
+    while (gridStep * zoom < 12) gridStep *= 5;
+    ctx.save();
+    ctx.translate(w / 2 + pan.x, h / 2 + pan.y);
+    ctx.rotate(-viewRotation);
+    ctx.scale(zoom, -zoom);
+    if (gridStep * zoom <= 400) {
       ctx.beginPath();
       ctx.strokeStyle = "#1b2027";
-      ctx.lineWidth = 1;
-      let ox = ((base.x % gridStep) + gridStep) % gridStep;
-      let oy = ((base.y % gridStep) + gridStep) % gridStep;
-      for (let x = ox; x < w; x += gridStep) {
-        ctx.moveTo(Math.round(x) + 0.5, 0);
-        ctx.lineTo(Math.round(x) + 0.5, h);
+      ctx.lineWidth = 1 / zoom;
+      const startX = Math.floor(minX / gridStep) * gridStep;
+      const startY = Math.floor(minY / gridStep) * gridStep;
+      for (let x = startX; x <= maxX; x += gridStep) {
+        ctx.moveTo(x, minY);
+        ctx.lineTo(x, maxY);
       }
-      for (let y = oy; y < h; y += gridStep) {
-        ctx.moveTo(0, Math.round(y) + 0.5);
-        ctx.lineTo(w, Math.round(y) + 0.5);
+      for (let y = startY; y <= maxY; y += gridStep) {
+        ctx.moveTo(minX, y);
+        ctx.lineTo(maxX, y);
       }
       ctx.stroke();
     }
 
-    // Origin Axes
-    ctx.strokeStyle = "#2e3b4a";
-    ctx.lineWidth = 1.2;
+    // Keep the WCS axes attached to their world directions as the view rotates.
+    ctx.lineWidth = 1.2 / zoom;
+    ctx.strokeStyle = "#704646";
     ctx.beginPath();
-    ctx.moveTo(0, Math.round(base.y) + 0.5);
-    ctx.lineTo(w, Math.round(base.y) + 0.5);
-    ctx.moveTo(Math.round(base.x) + 0.5, 0);
-    ctx.lineTo(Math.round(base.x) + 0.5, h);
+    ctx.moveTo(minX, 0);
+    ctx.lineTo(maxX, 0);
     ctx.stroke();
+    ctx.strokeStyle = "#416a55";
+    ctx.beginPath();
+    ctx.moveTo(0, minY);
+    ctx.lineTo(0, maxY);
+    ctx.stroke();
+    ctx.restore();
   }
 
   // Viewport Bounding Box in World Coordinates for Spatial Culling (Tuần 33 Optimization)
-  const vpTopLeft = screenToWorld(0, 0);
-  const vpBottomRight = screenToWorld(w, h);
-  const vpMinX = Math.min(vpTopLeft.x, vpBottomRight.x);
-  const vpMaxX = Math.max(vpTopLeft.x, vpBottomRight.x);
-  const vpMinY = Math.min(vpTopLeft.y, vpBottomRight.y);
-  const vpMaxY = Math.max(vpTopLeft.y, vpBottomRight.y);
+  const viewportCorners = [screenToWorld(0, 0), screenToWorld(w, 0), screenToWorld(0, h), screenToWorld(w, h)];
+  const vpMinX = Math.min(...viewportCorners.map((p) => p.x));
+  const vpMaxX = Math.max(...viewportCorners.map((p) => p.x));
+  const vpMinY = Math.min(...viewportCorners.map((p) => p.y));
+  const vpMaxY = Math.max(...viewportCorners.map((p) => p.y));
 
   // Draw Entities
   ctx.lineCap = "round";
@@ -1263,7 +2039,7 @@ function draw() {
       }
     } else if (e.kind === "arc") {
       const sweep = (e.end - e.start + Math.PI * 2) % (Math.PI * 2);
-      const n = Math.max(16, Math.ceil(sweep * e.radius * zoom / 6));
+      const n = arcTessellationSegments(sweep, e.radius, 6, 16);
       ctx.beginPath();
       for (let i = 0; i <= n; i++) {
         const a = e.start + (sweep * i) / n;
@@ -1292,7 +2068,7 @@ function draw() {
       const p = worldToScreen(e.x, e.y);
       ctx.save();
       ctx.translate(p.x, p.y);
-      ctx.rotate(-e.rotation);
+      ctx.rotate(-(e.rotation + viewRotation));
       const fontSize = Math.max(10, Math.round((e.height || 2.5) * zoom));
       ctx.font = `${fontSize}px 'Inter', sans-serif`;
       ctx.fillStyle = isSelected ? "#00e5ff" : layerColor;
@@ -1314,7 +2090,7 @@ function draw() {
       const p = worldToScreen(e.x, e.y);
       ctx.save();
       ctx.translate(p.x, p.y);
-      ctx.rotate(-e.rotation);
+      ctx.rotate(-(e.rotation + viewRotation));
       const markerSize = Math.max(7, Math.min(24, 10 * Math.max(0.5, e.scaleX || 1)));
       ctx.strokeStyle = isSelected ? "#00e5ff" : (layerColor || "#ffaa00");
       ctx.lineWidth = isSelected ? 2 : 1.3;
@@ -1401,7 +2177,7 @@ function draw() {
         ctx.stroke();
       } else if (e.kind === "arc") {
         const sweep = (e.end - e.start + Math.PI * 2) % (Math.PI * 2);
-        const n = Math.max(12, Math.ceil(sweep * e.radius * zoom / 8));
+        const n = arcTessellationSegments(sweep, e.radius, 8, 12);
         ctx.beginPath();
         for (let i = 0; i <= n; i++) {
           const a = e.start + (sweep * i) / n;
@@ -1503,22 +2279,23 @@ function draw() {
       ctx.beginPath();
       ctx.arc(s.x, s.y, 5.5, 0, Math.PI * 2);
       ctx.stroke();
+    } else if (currentSnap.kind === "intersection") {
+      ctx.beginPath();
+      ctx.moveTo(s.x - 5, s.y - 5);
+      ctx.lineTo(s.x + 5, s.y + 5);
+      ctx.moveTo(s.x - 5, s.y + 5);
+      ctx.lineTo(s.x + 5, s.y - 5);
+      ctx.stroke();
     }
   }
 
-  // Hints and readouts
-  const hintEl = $("#emptyHint");
-  if (hintEl) hintEl.classList.toggle("hidden", model.entities.length > 0 || points.length > 0);
+  // Canvas readouts
   const coordEl = $("#coordReadout");
   if (coordEl) coordEl.innerHTML = `X&nbsp; ${world.x.toFixed(3)}&nbsp;&nbsp; Y&nbsp; ${world.y.toFixed(3)}`;
   const zoomEl = $("#zoomReadout");
   if (zoomEl) zoomEl.textContent = `${Math.round(zoom * 100)}%`;
-  const coordsEl = $("#canvasCoords");
-  if (coordsEl) {
-    coordsEl.textContent = activeSpace === "model"
-      ? "MODEL SPACE · GRID ON · UCS WORLD"
-      : `PAPER SPACE (ISO A3) · 1:1 · ${activeSpace.toUpperCase()}`;
-  }
+  const spaceLabel = $("#canvasSpaceLabel");
+  if (spaceLabel) spaceLabel.textContent = activeSpace === "model" ? "WCS" : activeSpace.toUpperCase();
 }
 
 // Zoom Selected Entities (ZS / ZOOM OBJECT)
@@ -1538,14 +2315,7 @@ function zoomSelected() {
     maxY = Math.max(maxY, b.maxY);
   }
   if (!isFinite(minX)) return;
-  const viewport = $("#viewport");
-  const w = viewport.clientWidth, h = viewport.clientHeight, pad = 80;
-  pan = { x: 0, y: 0 };
-  const spanX = Math.max(1, maxX - minX);
-  const spanY = Math.max(1, maxY - minY);
-  zoom = Math.min((w - pad * 2) / spanX, (h - pad * 2) / spanY);
-  pan.x = -((minX + maxX) / 2) * zoom;
-  pan.y = ((minY + maxY) / 2) * zoom;
+  fitWorldBounds(minX, maxX, minY, maxY);
   draw();
   setStatus(currentLang === "vi" ? "Đã phóng to đối tượng đã chọn (ZOOM OBJECT)" : "Zoomed to selected object(s)");
 }
@@ -1574,82 +2344,86 @@ function renderRibbon() {
   const container = $("#ribbonContainer");
   if (!container) return;
 
-  if (activeRibbonTab === "start") {
+  if (activeRibbonTab === "home") {
     container.innerHTML = `
-      <div class="ribbon-group start-ribbon-group">
-        <div class="tools">
-          <button class="tool-button" id="ribbonStartNew"><span class="tool-icon">＋</span><span>${currentLang === "vi" ? "Bản vẽ mới" : "New Drawing"}</span></button>
-          <button class="tool-button" id="ribbonStartOpen"><span class="tool-icon">▣</span><span>${currentLang === "vi" ? "Mở tệp" : "Open"}</span></button>
-        </div>
-        <div class="group-caption">START</div>
-      </div>
-      <div class="ribbon-spacer"></div>
-      <div class="ribbon-hint">CONCOSTCAD · START</div>
-    `;
-  } else if (activeRibbonTab === "home") {
-    container.innerHTML = `
-      <div class="ribbon-group">
-        <div class="tools">
-          <button class="tool-button ${activeTool==='line'?'selected':''}" data-tool="line"><span class="tool-icon line-icon">／</span><span>${t("tool_line")}</span></button>
-          <button class="tool-button ${activeTool==='arc'?'selected':''}" data-tool="arc"><span class="tool-icon">◜</span><span>${t("tool_arc")}</span></button>
-          <button class="tool-button ${activeTool==='polyline'?'selected':''}" data-tool="polyline"><span class="tool-icon">⌁</span><span>${t("tool_poly")}</span></button>
-          <button class="tool-button ${activeTool==='circle'?'selected':''}" data-tool="circle"><span class="tool-icon">◯</span><span>${t("tool_circle")}</span></button>
-          <button class="tool-button ${activeTool==='rectangle'?'selected':''}" data-tool="rectangle"><span class="tool-icon">▭</span><span>${t("tool_rect")}</span></button>
-          <button class="tool-button ${activeTool==='spline'?'selected':''}" data-tool="spline" title="Vẽ đường cong Spline (SPL)"><span class="tool-icon">〰</span><span>${t("tool_spline")}</span></button>
-          <button class="tool-button ${activeTool==='revcloud'?'selected':''}" data-tool="revcloud" title="Đám mây ghi chú (REVCLOUD)"><span class="tool-icon">☁</span><span>${t("tool_revcloud")}</span></button>
-          <button class="tool-button ${activeTool==='hatch'?'selected':''}" data-tool="hatch" title="Tô mẫu mặt cắt (HATCH)"><span class="tool-icon">▨</span><span>${t("tool_hatch")}</span></button>
-          <button class="tool-button ${activeTool==='text'?'selected':''}" data-tool="text"><span class="tool-icon">T</span><span>${t("tool_text")}</span></button>
+      <div class="ribbon-group ribbon-home-draw-panel">
+        <div class="tools ribbon-home-draw-tools">
+          <button class="tool-button ribbon-home-large ${activeTool==='line'?'selected':''}" data-tool="line" title="${t("tool_line")} (LINE)"><span class="tool-icon"></span><span class="ribbon-command-label">Line</span></button>
+          <button class="tool-button ribbon-home-large ${activeTool==='polyline'?'selected':''}" data-tool="polyline" title="${t("tool_poly")} (PLINE)"><span class="tool-icon"></span><span class="ribbon-command-label">Polyline</span></button>
+          <button class="tool-button ribbon-home-large ${activeTool==='circle'?'selected':''}" data-tool="circle" title="${t("tool_circle")} (CIRCLE)"><span class="tool-icon"></span><span class="ribbon-command-label">Circle</span></button>
+          <button class="tool-button ribbon-home-large ${activeTool==='arc'?'selected':''}" data-tool="arc" title="${t("tool_arc")} (ARC)"><span class="tool-icon"></span><span class="ribbon-command-label">Arc</span></button>
+          <div class="ribbon-home-draw-stack">
+            <button class="tool-button ribbon-home-small ${activeTool==='rectangle'?'selected':''}" data-tool="rectangle" title="${t("tool_rect")} (RECTANG)"><span class="tool-icon"></span><span class="ribbon-command-label">Rectangle</span></button>
+            <button class="tool-button ribbon-home-small ${activeTool==='hatch'?'selected':''}" data-tool="hatch" title="${t("tool_hatch")} (HATCH)"><span class="tool-icon"></span><span class="ribbon-command-label">Hatch</span></button>
+            <button class="tool-button ribbon-home-small ${activeTool==='spline'?'selected':''}" data-tool="spline" title="${t("tool_spline")} (SPLINE)"><span class="tool-icon"></span><span class="ribbon-command-label">Spline</span></button>
+            <button class="tool-button ribbon-home-small ${activeTool==='revcloud'?'selected':''}" data-tool="revcloud" title="${t("tool_revcloud")} (REVCLOUD)"><span class="tool-icon"></span><span class="ribbon-command-label">Revcloud</span></button>
+          </div>
         </div>
         <div class="group-caption">${t("grp_draw")}</div>
       </div>
-      <div class="ribbon-group">
-        <div class="tools">
-          <button class="tool-button ${activeTool==='select'?'selected':''}" data-tool="select"><span class="tool-icon">↖</span><span>${t("tool_select")}</span></button>
-          <button class="tool-button ${activeTool==='move'?'selected':''}" data-tool="move"><span class="tool-icon">✥</span><span>${t("tool_move")}</span></button>
-          <button class="tool-button ${activeTool==='copy'?'selected':''}" data-tool="copy"><span class="tool-icon">⧉</span><span>${t("tool_copy")}</span></button>
-          <button class="tool-button ${activeTool==='rotate'?'selected':''}" data-tool="rotate"><span class="tool-icon">⟳</span><span>${t("tool_rotate")}</span></button>
-          <button class="tool-button ${activeTool==='mirror'?'selected':''}" data-tool="mirror"><span class="tool-icon">⧎</span><span>${t("tool_mirror")}</span></button>
-          <button class="tool-button ${activeTool==='fillet'?'selected':''}" data-tool="fillet"><span class="tool-icon">◜</span><span>${t("tool_fillet")}</span></button>
-          <button class="tool-button ${activeTool==='chamfer'?'selected':''}" data-tool="chamfer"><span class="tool-icon">◺</span><span>${t("tool_chamfer")}</span></button>
-          <button class="tool-button ${activeTool==='trim'?'selected':''}" data-tool="trim"><span class="tool-icon">✂</span><span>${t("tool_trim")}</span></button>
-          <button class="tool-button ${activeTool==='extend'?'selected':''}" data-tool="extend"><span class="tool-icon">⇥</span><span>${t("tool_extend")}</span></button>
-          <button class="tool-button ${activeTool==='join'?'selected':''}" data-tool="join"><span class="tool-icon">☍</span><span>${t("tool_join")}</span></button>
-          <button class="tool-button" id="offsetBtn"><span class="tool-icon">⫽</span><span>${t("tool_offset")}</span></button>
-          <button class="tool-button" id="takeoffRibbonBtn" title="Thống kê khối lượng (TAKEOFF)"><span class="tool-icon">📊</span><span>${currentLang === "vi" ? "Tiên lượng (BOM)" : "Takeoff"}</span></button>
-          <button class="tool-button" id="explodeBtn"><span class="tool-icon">💥</span><span>${t("tool_explode")}</span></button>
-          <button class="tool-button danger" id="eraseBtn"><span class="tool-icon">⌫</span><span>${t("tool_erase")}</span></button>
-          <button class="tool-button compact" id="undoBtn"><span class="tool-icon">↶</span><span>${t("tool_undo")}</span></button>
-          <button class="tool-button compact" id="redoBtn"><span class="tool-icon">↷</span><span>${t("tool_redo")}</span></button>
+      <div class="ribbon-group ribbon-home-modify-panel">
+        <div class="tools ribbon-home-modify-tools">
+          <button class="tool-button ribbon-home-modify ${activeTool==='move'?'selected':''}" data-tool="move" title="${t("tool_move")} (MOVE)"><span class="tool-icon"></span><span class="ribbon-command-label">Move</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='copy'?'selected':''}" data-tool="copy" title="${t("tool_copy")} (COPY)"><span class="tool-icon"></span><span class="ribbon-command-label">Copy</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='rotate'?'selected':''}" data-tool="rotate" title="${t("tool_rotate")} (ROTATE)"><span class="tool-icon"></span><span class="ribbon-command-label">Rotate</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='mirror'?'selected':''}" data-tool="mirror" title="${t("tool_mirror")} (MIRROR)"><span class="tool-icon"></span><span class="ribbon-command-label">Mirror</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='trim'?'selected':''}" data-tool="trim" title="${t("tool_trim")} (TRIM)"><span class="tool-icon"></span><span class="ribbon-command-label">Trim</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='extend'?'selected':''}" data-tool="extend" title="${t("tool_extend")} (EXTEND)"><span class="tool-icon"></span><span class="ribbon-command-label">Extend</span></button>
+          <button class="tool-button ribbon-home-modify" id="offsetBtn" title="${t("tool_offset")} (OFFSET)"><span class="tool-icon"></span><span class="ribbon-command-label">Offset</span></button>
+          <button class="tool-button ribbon-home-modify" id="eraseBtn" title="${t("tool_erase")} (ERASE)"><span class="tool-icon"></span><span class="ribbon-command-label">Erase</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='fillet'?'selected':''}" data-tool="fillet" title="${t("tool_fillet")} (FILLET)"><span class="tool-icon"></span><span class="ribbon-command-label">Fillet</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='chamfer'?'selected':''}" data-tool="chamfer" title="${t("tool_chamfer")} (CHAMFER)"><span class="tool-icon"></span><span class="ribbon-command-label">Chamfer</span></button>
         </div>
         <div class="group-caption">${t("grp_modify")}</div>
       </div>
-      <div class="ribbon-group">
-        <div class="tools" style="flex-direction: column; justify-content: center; gap: 4px;">
-          <select id="ribbonLayerSelect" class="ribbon-select" title="Active drawing layer">
-            ${model.layers.map(l => `<option value="${l.name}" ${l.name===model.currentLayer?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}
-          </select>
-          <button class="title-action" id="ribbonAddLayer" style="height: 22px; width: 100%;">${t("add_layer")}</button>
-        </div>
-        <div class="group-caption">${t("grp_layers")}</div>
-      </div>
-      <div class="ribbon-group">
-        <div class="tools file-tools">
-          <button class="tool-button compact ${activeTool==='dim'?'selected':''}" data-tool="dim"><span class="tool-icon">📐</span><span>${t("tool_dim")}</span></button>
-          <button class="tool-button compact ${activeTool==='dist'?'selected':''}" data-tool="dist"><span class="tool-icon">📏</span><span>${t("tool_dist")}</span></button>
-          <button class="tool-button compact ${activeTool==='area'?'selected':''}" data-tool="area"><span class="tool-icon">⏢</span><span>${t("tool_area")}</span></button>
+      <div class="ribbon-group ribbon-home-annotation-panel">
+        <div class="tools ribbon-home-annotation-tools">
+          <button class="tool-button ribbon-home-large ${activeTool==='text'?'selected':''}" data-tool="text" title="${t("tool_text")} (TEXT)"><span class="tool-icon"></span><span class="ribbon-command-label">Text</span></button>
+          <button class="tool-button ribbon-home-large ${activeTool==='dim'?'selected':''}" data-tool="dim" title="${t("tool_dim")} (DIM)"><span class="tool-icon"></span><span class="ribbon-command-label">Dimension</span></button>
         </div>
         <div class="group-caption">${t("grp_annotate")}</div>
       </div>
-      <div class="ribbon-group">
-        <div class="tools file-tools">
-          <button class="tool-button compact" id="zoomExtents"><span class="tool-icon">⛶</span><span>${t("tool_zoom_all")}</span></button>
-          <button class="tool-button compact" id="ribbonOpen"><span class="tool-icon">▣</span><span>${t("tool_open")}</span></button>
-          <button class="tool-button compact" id="saveBtn"><span class="tool-icon">💾</span><span>${t("tool_save")}</span></button>
+      <div class="ribbon-group ribbon-home-layers-panel">
+        <div class="tools ribbon-home-layers-tools">
+          <label class="ribbon-field-label" for="ribbonLayerSelect">${currentLang === "vi" ? "Lớp hiện hành" : "Current Layer"}</label>
+          <select id="ribbonLayerSelect" class="ribbon-select" title="Active drawing layer">
+            ${model.layers.map(l => `<option value="${escapeHtml(l.handle)}" ${l.name===model.currentLayer?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}
+          </select>
+          <div class="ribbon-home-layer-actions">
+            <button class="tool-button ribbon-home-layer-add ribbon-home-layer-add-icon" id="ribbonAddLayer" aria-label="${t("add_layer")}" title="${t("add_layer")}"><span class="tool-icon"></span></button>
+            <button class="tool-button ribbon-home-layer-add" id="showLayersPanel" aria-pressed="${paletteVisibility.layers}" title="Toggle Layers palette"><span class="tool-icon"></span><span class="ribbon-command-label">Layers</span></button>
+          </div>
         </div>
-        <div class="group-caption">${t("grp_view_file")}</div>
+        <div class="group-caption">${t("grp_layers")}</div>
       </div>
-      <div class="ribbon-spacer"></div>
-      <div class="ribbon-hint">MODEL · WCS · GRID ON</div>
+      <div class="ribbon-group ribbon-home-properties-panel">
+        <div class="tools ribbon-home-properties-tools">
+          <label class="ribbon-home-color-control" for="ribbonLayerColor">
+            <span>${currentLang === "vi" ? "Màu lớp hiện hành" : "Current Layer Color"}</span>
+            <input type="color" id="ribbonLayerColor" value="${model.layers.find((layer) => layer.name === model.currentLayer)?.color || "#79c9dc"}" aria-label="${currentLang === "vi" ? "Màu lớp hiện hành" : "Current Layer Color"}" ${showStartScreen ? "disabled" : ""}>
+            <strong>${currentLang === "vi" ? "Theo lớp" : "ByLayer"}</strong>
+          </label>
+          <button class="tool-button ribbon-home-properties-toggle ${paletteVisibility.properties ? 'selected' : ''}" id="showPropertiesPanel" aria-pressed="${paletteVisibility.properties}" title="Toggle Properties palette"><span class="tool-icon"></span><span class="ribbon-command-label">Properties</span></button>
+        </div>
+        <div class="group-caption">PROPERTIES</div>
+      </div>
+      <div class="ribbon-group ribbon-home-utilities-panel">
+        <div class="tools ribbon-home-utilities-tools">
+          <button class="tool-button ribbon-home-small ${activeTool==='dist'?'selected':''}" data-tool="dist" title="${t("tool_dist")} (DIST)"><span class="tool-icon"></span><span class="ribbon-command-label">Distance</span></button>
+          <button class="tool-button ribbon-home-small ${activeTool==='area'?'selected':''}" data-tool="area" title="${t("tool_area")} (AREA)"><span class="tool-icon"></span><span class="ribbon-command-label">Area</span></button>
+          <button class="tool-button ribbon-home-small" id="takeoffRibbonBtn" title="${currentLang === "vi" ? "Thống kê khối lượng" : "Quantity takeoff"} (TAKEOFF)"><span class="tool-icon"></span><span class="ribbon-command-label">${currentLang === "vi" ? "Thống kê" : "Takeoff"}</span></button>
+        </div>
+        <div class="group-caption">UTILITIES</div>
+      </div>
+      <div class="ribbon-group ribbon-home-view-panel">
+        <div class="tools ribbon-home-view-tools">
+          <button class="tool-button ribbon-home-small" id="zoomExtents" title="${t("tool_zoom_all")}"><span class="tool-icon"></span><span class="ribbon-command-label">Extents</span></button>
+          <button class="tool-button ribbon-home-small" id="zoomInBtn" title="Zoom In"><span class="tool-icon"></span><span class="ribbon-command-label">Zoom In</span></button>
+          <button class="tool-button ribbon-home-small" id="zoomOutBtn" title="Zoom Out"><span class="tool-icon"></span><span class="ribbon-command-label">Zoom Out</span></button>
+          <button class="tool-button ribbon-home-small" id="zoomResetBtn" title="Zoom to 100%"><span class="tool-icon"></span><span class="ribbon-command-label">100%</span></button>
+        </div>
+        <div class="group-caption">VIEW</div>
+      </div>
     `;
   } else if (activeRibbonTab === "draw") {
     container.innerHTML = `
@@ -1669,6 +2443,24 @@ function renderRibbon() {
           <button class="tool-button compact" id="closePolylineBtn"><span class="tool-icon">⟲</span><span>Close PL</span></button>
         </div>
         <div class="group-caption">POLYLINE MODES</div>
+      </div>
+      <div class="ribbon-group">
+        <div class="tools">
+          <button class="tool-button compact ${activeTool==='spline'?'selected':''}" data-tool="spline" title="Vẽ đường cong Spline (SPL)"><span class="tool-icon">〰</span><span>${t("tool_spline")}</span></button>
+          <button class="tool-button compact ${activeTool==='revcloud'?'selected':''}" data-tool="revcloud" title="Đám mây ghi chú (REVCLOUD)"><span class="tool-icon">☁</span><span>${t("tool_revcloud")}</span></button>
+          <button class="tool-button compact ${activeTool==='hatch'?'selected':''}" data-tool="hatch" title="Tô mẫu mặt cắt (HATCH)"><span class="tool-icon">▨</span><span>${t("tool_hatch")}</span></button>
+        </div>
+        <div class="group-caption">${currentLang === "vi" ? "HÌNH HỌC KHÁC" : "MORE GEOMETRY"}</div>
+      </div>
+      <div class="ribbon-group">
+        <div class="tools">
+          <button class="tool-button compact ${activeTool==='fillet'?'selected':''}" data-tool="fillet"><span class="tool-icon">◜</span><span>${t("tool_fillet")}</span></button>
+          <button class="tool-button compact ${activeTool==='chamfer'?'selected':''}" data-tool="chamfer"><span class="tool-icon">◺</span><span>${t("tool_chamfer")}</span></button>
+          <button class="tool-button compact ${activeTool==='join'?'selected':''}" data-tool="join"><span class="tool-icon">☍</span><span>${t("tool_join")}</span></button>
+          <button class="tool-button compact" id="takeoffRibbonBtn" title="Thống kê khối lượng (TAKEOFF)"><span class="tool-icon">📊</span><span>${currentLang === "vi" ? "BOM" : "Takeoff"}</span></button>
+          <button class="tool-button compact" id="explodeBtn"><span class="tool-icon">💥</span><span>${t("tool_explode")}</span></button>
+        </div>
+        <div class="group-caption">${currentLang === "vi" ? "CHỈNH SỬA KHÁC" : "MORE MODIFY"}</div>
       </div>
       <div class="ribbon-spacer"></div>
       <div class="ribbon-hint">Click canvas or type coordinates</div>
@@ -1710,12 +2502,64 @@ function renderRibbon() {
         </div>
         <div class="group-caption">${t("grp_aids")}</div>
       </div>
+      <div class="ribbon-group">
+        <div class="tools">
+          <button class="tool-button compact ${paletteVisibility.properties ? 'selected' : ''}" id="showPropertiesPanel" aria-pressed="${paletteVisibility.properties}" title="Toggle Properties palette"><span class="tool-icon">▤</span><span>Properties</span></button>
+          <button class="tool-button compact ${paletteVisibility.layers ? 'selected' : ''}" id="showLayersPanel" aria-pressed="${paletteVisibility.layers}" title="Toggle Layers palette"><span class="tool-icon">▧</span><span>Layers</span></button>
+        </div>
+        <div class="group-caption">PALETTES</div>
+      </div>
+      <div class="ribbon-spacer"></div>
+    `;
+  } else if (activeRibbonTab === "manage") {
+    container.innerHTML = `
+      <div class="ribbon-group">
+        <div class="tools ribbon-manage-layer-tools">
+          <label class="ribbon-field-label" for="ribbonLayerSelect">${currentLang === "vi" ? "Lớp hiện hành" : "Current Layer"}</label>
+          <select id="ribbonLayerSelect" class="ribbon-select" title="Active drawing layer">
+            ${model.layers.map(l => `<option value="${escapeHtml(l.handle)}" ${l.name===model.currentLayer?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}
+          </select>
+          <button class="title-action" id="ribbonAddLayer"><span class="tool-icon"></span><span>${t("add_layer")}</span></button>
+        </div>
+        <div class="group-caption">${t("grp_layers")}</div>
+      </div>
+      <div class="ribbon-group">
+        <div class="tools">
+          <button class="tool-button compact ${paletteVisibility.layers ? 'selected' : ''}" id="showLayersPanel" aria-pressed="${paletteVisibility.layers}" title="Toggle Layers palette"><span class="tool-icon">▧</span><span class="ribbon-command-label">Layers</span></button>
+          <button class="tool-button compact ${paletteVisibility.properties ? 'selected' : ''}" id="showPropertiesPanel" aria-pressed="${paletteVisibility.properties}" title="Toggle Properties palette"><span class="tool-icon">▤</span><span class="ribbon-command-label">Properties</span></button>
+        </div>
+        <div class="group-caption">PALETTES</div>
+      </div>
+      <div class="ribbon-spacer"></div>
+    `;
+  } else if (activeRibbonTab === "output") {
+    container.innerHTML = `
+      <div class="ribbon-group">
+        <div class="tools">
+          <button class="tool-button" id="outputSaveBtn" title="Save drawing (Ctrl+S)"><span class="tool-icon">▣</span><span class="ribbon-command-label">Save</span></button>
+          <button class="tool-button" id="outputExportPng" title="Export drawing as PNG"><span class="tool-icon">▧</span><span class="ribbon-command-label">PNG</span></button>
+        </div>
+        <div class="group-caption">${currentLang === "vi" ? "LƯU VÀ XUẤT" : "SAVE & EXPORT"}</div>
+      </div>
+      <div class="ribbon-group">
+        <div class="tools">
+          <button class="tool-button" id="outputTakeoffBtn" title="${currentLang === "vi" ? "Thống kê khối lượng" : "Quantity takeoff"}"><span class="tool-icon">▥</span><span class="ribbon-command-label">${currentLang === "vi" ? "Thống kê" : "Takeoff"}</span></button>
+        </div>
+        <div class="group-caption">${currentLang === "vi" ? "THỐNG KÊ" : "QUANTITIES"}</div>
+      </div>
       <div class="ribbon-spacer"></div>
     `;
   }
 
+  if (showStartScreen) {
+    container.querySelectorAll("button, select, input").forEach((control) => {
+      if (control.id !== "ribbonOpen") control.disabled = true;
+    });
+  }
+
   applyToolbarIcons();
   bindRibbonEvents();
+  applyRibbonDisplayMode();
   const startNew = $("#ribbonStartNew");
   if (startNew) startNew.onclick = () => $("#newBtn").click();
   const startOpen = $("#ribbonStartOpen");
@@ -1754,7 +2598,14 @@ function bindRibbonEvents() {
   const ribbonLayerSelect = $("#ribbonLayerSelect");
   if (ribbonLayerSelect) {
     ribbonLayerSelect.onchange = (e) => {
-      sync(invoke("set_current_layer", { name: e.target.value }));
+      const layer = model.layers.find((item) => item.handle === e.target.value);
+      if (layer) sync(invoke("set_current_layer", { name: layer.name }));
+    };
+  }
+  const ribbonLayerColor = $("#ribbonLayerColor");
+  if (ribbonLayerColor) {
+    ribbonLayerColor.onchange = (e) => {
+      sync(invoke("set_layer_color", { name: model.currentLayer, hex: e.target.value }));
     };
   }
 
@@ -1789,6 +2640,18 @@ function bindRibbonEvents() {
 
   const ribbonToggleOrtho = $("#ribbonToggleOrtho");
   if (ribbonToggleOrtho) ribbonToggleOrtho.onclick = toggleOrtho;
+
+  const showPropertiesPanel = $("#showPropertiesPanel");
+  if (showPropertiesPanel) showPropertiesPanel.onclick = () => setPaletteVisibility("properties", !paletteVisibility.properties);
+  const showLayersPanel = $("#showLayersPanel");
+  if (showLayersPanel) showLayersPanel.onclick = () => setPaletteVisibility("layers", !paletteVisibility.layers);
+
+  const outputSaveBtn = $("#outputSaveBtn");
+  if (outputSaveBtn) outputSaveBtn.onclick = saveDrawing;
+  const outputExportPng = $("#outputExportPng");
+  if (outputExportPng) outputExportPng.onclick = exportDrawingImage;
+  const outputTakeoffBtn = $("#outputTakeoffBtn");
+  if (outputTakeoffBtn) outputTakeoffBtn.onclick = showTakeoffModal;
 }
 
 function escapeHtml(s) {
@@ -1798,6 +2661,15 @@ function escapeHtml(s) {
 async function sync(promise) {
   try {
     model = await promise;
+    if (Array.isArray(model.documents)) {
+      openDocuments = model.documents.map((drawing) => ({
+        id: drawing.id,
+        title: drawing.title,
+        path: drawing.title,
+        dirty: drawing.dirty
+      }));
+      activeDocId = model.documentId;
+    }
     render();
     return true;
   } catch (e) {
@@ -1857,7 +2729,11 @@ function chooseTool(tool) {
 function render() {
   const title = model.title.split(/[\\/]/).pop().replace(/\.(dwg|dxf)$/i, "") || "Drawing1";
   const titleNameEl = $("#titleName");
-  if (titleNameEl) titleNameEl.textContent = title;
+  if (titleNameEl) titleNameEl.textContent = showStartScreen ? "CONCOSTCAD" : title;
+  ["topSaveBtn", "topUndoBtn", "topRedoBtn"].forEach((id) => {
+    const button = document.getElementById(id);
+    if (button) button.disabled = showStartScreen;
+  });
   const tabNameEl = $("#drawingTabName");
   if (tabNameEl) tabNameEl.textContent = title;
   const dirtyDot = $("#dirtyDot");
@@ -1872,7 +2748,7 @@ function render() {
     layerList.innerHTML = model.layers
       .map(
         (l) => `
-        <div class="layer-row ${l.name === model.currentLayer ? "current" : ""}" data-layer="${escapeHtml(l.name)}">
+        <div class="layer-row ${l.name === model.currentLayer ? "current" : ""}" data-layer-handle="${escapeHtml(l.handle)}">
           <span class="layer-title"><i class="layer-swatch" style="background: ${l.color || '#79c9dc'}; box-shadow: 0 0 4px ${l.color || '#79c9dc'}44;" title="Đổi màu Layer" data-layer-color="${escapeHtml(l.name)}"></i>${escapeHtml(l.name)}</span>
           <span class="layer-eye" title="Toggle Visibility">${l.off ? "—" : "◉"}</span>
           <span class="layer-lock" title="Toggle Lock">${l.locked ? "▣" : "—"}</span>
@@ -1880,8 +2756,10 @@ function render() {
       )
       .join("");
 
-    $(".layer-row").forEach((row) => {
-      const layerName = row.dataset.layer;
+    $$(".layer-row").forEach((row) => {
+      const layer = model.layers.find((item) => item.handle === row.dataset.layerHandle);
+      if (!layer) return;
+      const layerName = layer.name;
       row.onclick = (e) => {
         if (e.target.classList.contains("layer-swatch")) {
           const colors = ["#ef4444", "#f59e0b", "#10b981", "#06b6d4", "#3b82f6", "#ec4899", "#ffffff", "#79c9dc"];
@@ -1891,10 +2769,10 @@ function render() {
           return;
         }
         if (e.target.classList.contains("layer-eye")) {
-          const lyr = model.layers.find((l) => l.name === layerName);
+          const lyr = layer;
           if (lyr) sync(invoke("set_layer_flags", { name: layerName, frozen: lyr.frozen, off: !lyr.off, locked: lyr.locked }));
         } else if (e.target.classList.contains("layer-lock")) {
-          const lyr = model.layers.find((l) => l.name === layerName);
+          const lyr = layer;
           if (lyr) sync(invoke("set_layer_flags", { name: layerName, frozen: lyr.frozen, off: lyr.off, locked: !lyr.locked }));
         } else {
           sync(invoke("set_current_layer", { name: layerName }));
@@ -2116,20 +2994,51 @@ async function redoAction() {
   }
 }
 
+async function saveWithWarnings(path) {
+  let warnings;
+  try {
+    warnings = await invoke("save_warnings", { path });
+  } catch (e) {
+    setStatus(String(e));
+    return false;
+  }
+  if (warnings.length > 0) {
+    const heading = currentLang === "vi"
+      ? "Bản vẽ có nội dung chưa được hỗ trợ đầy đủ. Một số dữ liệu có thể không được giữ nguyên khi lưu:\n\n"
+      : "This drawing contains content that is not fully supported. Some data may not be preserved when saving:\n\n";
+    const details = warnings.slice(0, 20).map((warning, index) => `${index + 1}. ${warning}`).join("\n");
+    const remaining = warnings.length > 20
+      ? (currentLang === "vi" ? `\n… và ${warnings.length - 20} cảnh báo khác.` : `\n… and ${warnings.length - 20} more warning(s).`)
+      : "";
+    const question = currentLang === "vi"
+      ? "\n\nBạn có muốn tiếp tục lưu?"
+      : "\n\nContinue saving?";
+    if (!window.confirm(`${heading}${details}${remaining}${question}`)) return false;
+  }
+  return sync(invoke("save_drawing", {
+    path,
+    acknowledgeWarnings: warnings.length > 0
+  }));
+}
+
 async function openDrawing(selectedPath = null) {
   const path = selectedPath || await open({
     multiple: false,
     filters: [{ name: "CAD drawing", extensions: ["dwg", "dxf"] }]
   });
   if (path) {
+    const scratchDrawingId = showStartScreen && hasOnlyEmptyScratchDrawing() ? activeDocId : null;
     enterEditor();
     setStatus("Opening drawing…");
     if (await sync(invoke("open_drawing", { path }))) {
-      rememberRecentDrawing(path);
+      if (scratchDrawingId !== null) {
+        await sync(invoke("close_drawing", { id: scratchDrawingId, discard: true }));
+      }
       updateActiveDocumentTab();
       selectedHandles.clear();
       setStatus(`Opened ${model.entityCount} model-space entities`);
       zoomToExtents();
+      rememberRecentDrawing(path);
     }
   }
 }
@@ -2149,33 +3058,40 @@ async function saveDrawing() {
     });
     if (!path) return;
   }
-  if (await sync(invoke("save_drawing", { path }))) setStatus("Drawing saved successfully");
+  if (await saveWithWarnings(path)) {
+    const savedPath = path || model.title;
+    if (savedPath && savedPath !== "Drawing1") rememberRecentDrawing(savedPath);
+    setStatus("Drawing saved successfully");
+  }
+}
+
+async function saveDrawingAs() {
+  const path = await save({
+    defaultPath: model.title && model.title !== "Drawing1" ? model.title : undefined,
+    filters: [
+      { name: "DWG drawing", extensions: ["dwg"] },
+      { name: "DXF drawing", extensions: ["dxf"] }
+    ]
+  });
+  if (!path) return;
+  if (await saveWithWarnings(path)) {
+    rememberRecentDrawing(path);
+    setStatus("Drawing saved successfully");
+  }
 }
 
 function zoomToExtents() {
   if (!model.entities.length) return;
-  let xs = [], ys = [];
-  for (const e of model.entities) {
-    if (e.kind === "line") {
-      xs.push(e.x1, e.x2);
-      ys.push(e.y1, e.y2);
-    } else if (e.kind === "arc") {
-      xs.push(e.x - e.radius, e.x + e.radius);
-      ys.push(e.y - e.radius, e.y + e.radius);
-    } else if (e.kind === "polyline") {
-      for (const p of e.points) {
-        xs.push(p.x);
-        ys.push(p.y);
-      }
-    }
-  }
-  if (!xs.length) return;
-  const viewport = $("#viewport");
-  const w = viewport.clientWidth, h = viewport.clientHeight, pad = 80;
-  pan = { x: 0, y: 0 };
-  zoom = Math.min((w - pad * 2) / (Math.max(...xs) - Math.min(...xs) || 1), (h - pad * 2) / (Math.max(...ys) - Math.min(...ys) || 1));
-  pan.x = -((Math.min(...xs) + Math.max(...xs)) / 2) * zoom;
-  pan.y = ((Math.min(...ys) + Math.max(...ys)) / 2) * zoom;
+  const visible = model.entities.filter((e) => {
+    const layer = model.layers.find((item) => item.name === e.layer);
+    return !layer || (!layer.off && !layer.frozen);
+  });
+  if (!visible.length) return;
+  const bounds = visible.map(getEntityBounds);
+  fitWorldBounds(
+    Math.min(...bounds.map((b) => b.minX)), Math.max(...bounds.map((b) => b.maxX)),
+    Math.min(...bounds.map((b) => b.minY)), Math.max(...bounds.map((b) => b.maxY))
+  );
   draw();
 }
 
@@ -2268,21 +3184,30 @@ async function acceptCurrentCommand() {
 function toggleGrid() {
   showGrid = !showGrid;
   const b = $("#toggleGridBtn");
-  if (b) b.classList.toggle("active", showGrid);
+  if (b) {
+    b.classList.toggle("active", showGrid);
+    b.setAttribute("aria-pressed", String(showGrid));
+  }
   draw();
 }
 
 function toggleSnap() {
   snapEnabled = !snapEnabled;
   const b = $("#toggleSnapBtn");
-  if (b) b.classList.toggle("active", snapEnabled);
+  if (b) {
+    b.classList.toggle("active", snapEnabled);
+    b.setAttribute("aria-pressed", String(snapEnabled));
+  }
   draw();
 }
 
 function toggleOrtho() {
   orthoEnabled = !orthoEnabled;
   const b = $("#toggleOrthoBtn");
-  if (b) b.classList.toggle("active", orthoEnabled);
+  if (b) {
+    b.classList.toggle("active", orthoEnabled);
+    b.setAttribute("aria-pressed", String(orthoEnabled));
+  }
   draw();
 }
 
@@ -2374,7 +3299,7 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         draw();
         return;
       }
-      const hit = hitTestEntity(p, 8 / zoom);
+      const hit = await hitTestEntity(p, 8 / zoom);
       if (hit) {
         if (e.shiftKey || e.ctrlKey) {
           if (selectedHandles.has(hit.handle)) {
@@ -2441,7 +3366,7 @@ function bindCanvasEvents(viewportEl, canvasEl) {
       points = [];
       chooseTool("select");
     } else if (activeTool === "fillet") {
-      const hit = hitTestEntity(p, 8 / zoom);
+      const hit = await hitTestEntity(p, 8 / zoom);
       if (hit) {
         points.push(hit);
         if (points.length === 1) {
@@ -2458,7 +3383,7 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         }
       }
     } else if (activeTool === "chamfer") {
-      const hit = hitTestEntity(p, 8 / zoom);
+      const hit = await hitTestEntity(p, 8 / zoom);
       if (hit) {
         points.push(hit);
         if (points.length === 1) {
@@ -2477,7 +3402,7 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         }
       }
     } else if (activeTool === "trim") {
-      const hit = hitTestEntity(p, 8 / zoom);
+      const hit = await hitTestEntity(p, 8 / zoom);
       if (hit) {
         const allOtherHandles = model.entities.filter(ent => ent.handle !== hit.handle).map(ent => ent.handle);
         const ok = await sync(invoke("trim_line", { targetHandle: hit.handle, clickX: p.x, clickY: p.y, cutterHandles: allOtherHandles }));
@@ -2486,7 +3411,7 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         }
       }
     } else if (activeTool === "extend") {
-      const hit = hitTestEntity(p, 8 / zoom);
+      const hit = await hitTestEntity(p, 8 / zoom);
       if (hit) {
         const allOtherHandles = model.entities.filter(ent => ent.handle !== hit.handle).map(ent => ent.handle);
         const ok = await sync(invoke("extend_line", { targetHandle: hit.handle, clickX: p.x, clickY: p.y, boundaryHandles: allOtherHandles }));
@@ -2500,7 +3425,7 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         setStatus(currentLang === "vi" ? "Đã nối các đối tượng thành Polyline (JOIN)" : "Entities joined into Polyline");
         chooseTool("select");
       } else {
-        const hit = hitTestEntity(p, 8 / zoom);
+        const hit = await hitTestEntity(p, 8 / zoom);
         if (hit) {
           selectedHandles.add(hit.handle);
           renderProperties();
@@ -2554,7 +3479,7 @@ function bindCanvasEvents(viewportEl, canvasEl) {
       }
     } else if (activeTool === "move") {
       if (selectedHandles.size === 0) {
-        const hit = hitTestEntity(p, 8 / zoom);
+        const hit = await hitTestEntity(p, 8 / zoom);
         if (hit) {
           selectedHandles.add(hit.handle);
           renderProperties();
@@ -2579,7 +3504,7 @@ function bindCanvasEvents(viewportEl, canvasEl) {
       }
     } else if (activeTool === "copy") {
       if (selectedHandles.size === 0) {
-        const hit = hitTestEntity(p, 8 / zoom);
+        const hit = await hitTestEntity(p, 8 / zoom);
         if (hit) {
           selectedHandles.add(hit.handle);
           renderProperties();
@@ -2604,7 +3529,7 @@ function bindCanvasEvents(viewportEl, canvasEl) {
       }
     } else if (activeTool === "rotate") {
       if (selectedHandles.size === 0) {
-        const hit = hitTestEntity(p, 8 / zoom);
+        const hit = await hitTestEntity(p, 8 / zoom);
         if (hit) {
           selectedHandles.add(hit.handle);
           renderProperties();
@@ -2628,7 +3553,7 @@ function bindCanvasEvents(viewportEl, canvasEl) {
       }
     } else if (activeTool === "mirror") {
       if (selectedHandles.size === 0) {
-        const hit = hitTestEntity(p, 8 / zoom);
+        const hit = await hitTestEntity(p, 8 / zoom);
         if (hit) {
           selectedHandles.add(hit.handle);
           renderProperties();
@@ -2657,7 +3582,7 @@ function bindCanvasEvents(viewportEl, canvasEl) {
       }
     } else if (activeTool === "offset") {
       if (!offsetTargetHandle) {
-        const hit = hitTestEntity(p, 8 / zoom);
+        const hit = await hitTestEntity(p, 8 / zoom);
         if (hit) {
           offsetTargetHandle = hit.handle;
           setStatus(`OFFSET · Pick side to offset (Distance = ${offsetDist})`);
@@ -2681,7 +3606,9 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         const [p1, p2, pOff] = points;
         const dLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
         const textOverride = dLen.toFixed(dimPrecision) + (dimSuffix ? " " + dimSuffix : "");
-        await sync(invoke("add_dimension", { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ox: pOff.x, oy: pOff.y, textOverride }));
+        await sync(invoke("add_dimension", {
+          request: { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ox: pOff.x, oy: pOff.y, textOverride }
+        }));
         points = [];
         chooseTool("select");
         setStatus(currentLang === "vi" ? "Đã ghi kích thước (DIM)" : "Dimension created");
@@ -2992,6 +3919,10 @@ function bindCommandBarEvents() {
       e.preventDefault();
       saveDrawing();
     }
+    if (e.ctrlKey && e.key.toLowerCase() === "n") {
+      e.preventDefault();
+      $("#newBtn")?.click();
+    }
     if (e.ctrlKey && e.key.toLowerCase() === "o") {
       e.preventDefault();
       openDrawing();
@@ -3241,78 +4172,100 @@ new ResizeObserver(resize).observe($("#viewport"));
 resize();
 renderRibbon();
 render();
+const revealWindowAfterFirstPaint = async () => {
+  const appWindow = getCurrentWindow();
+  try {
+    await sync(invoke("get_snapshot"));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  } finally {
+    await appWindow.show();
+    await appWindow.setFocus();
+  }
+};
+revealWindowAfterFirstPaint();
 
 // Background autosave timer (Tuần 31: Drawing robustness)
 setInterval(async () => {
-  if (model && model.dirty) {
+  if (openDocuments.some((drawing) => drawing.dirty)) {
     try {
-      localStorage.setItem("concostcad_autosave_ts", Date.now().toString());
-      setStatus(currentLang === "vi" ? "● Tự động lưu bản sao lưu (Autosaved)" : "● Autosaved drawing snapshot");
-    } catch (_) {}
+      const paths = await invoke("autosave_drawings");
+      if (paths.length) {
+        localStorage.setItem("concostcad_autosave_ts", Date.now().toString());
+        setStatus(currentLang === "vi" ? `Đã lưu ${paths.length} bản sao dự phòng trong CONCOSTCAD/Autosave` : `Saved ${paths.length} backup(s) in CONCOSTCAD/Autosave`);
+      }
+    } catch (error) {
+      setStatus(String(error));
+    }
   }
 }, 180000);
 
 
 function renderDocumentTabs() {
-  const container = $(".drawing-tab");
+  const container = $("#documentTabs");
   if (!container) return;
 
-  const tabsHtml = openDocuments.map((d) => `
-    <div class="doc-tab ${d.id === activeDocId ? 'active' : ''}" data-doc-id="${d.id}">
+  // The backend keeps one empty active document so commands always have a
+  // workspace. Keep that implementation detail out of the Start tab strip;
+  // it becomes visible when the user explicitly starts drawing.
+  const visibleDocuments = showStartScreen && hasOnlyEmptyScratchDrawing()
+    ? []
+    : openDocuments;
+  const tabsHtml = visibleDocuments.map((d) => `
+    <div class="doc-tab ${!showStartScreen && d.id === activeDocId ? 'active' : ''}" data-doc-id="${d.id}">
       <span class="file-dot"></span>
       <span class="doc-title">${escapeHtml(d.title)}</span>
       <span class="dirty-dot ${d.dirty ? 'visible' : ''}"></span>
-      <button class="close-tab" data-close-id="${d.id}" title="Close drawing">×</button>
+      <button type="button" class="close-tab" data-close-id="${d.id}" title="${currentLang === "vi" ? "Đóng bản vẽ" : "Close drawing"}" aria-label="${currentLang === "vi" ? "Đóng bản vẽ" : "Close drawing"}">×</button>
     </div>
   `).join("");
 
   container.innerHTML = `
+    <button class="doc-tab start-doc-tab ${showStartScreen ? 'active' : ''}" id="startDocumentTab">Start</button>
     ${tabsHtml}
     <button class="add-tab-btn" id="addDocTabBtn" title="Bản vẽ mới (New Drawing)">＋</button>
   `;
 
-  $$(".doc-tab").forEach((tab) => {
+  const startTab = $("#startDocumentTab");
+  if (startTab) startTab.onclick = () => {
+    if (!showStartScreen) showStartTab();
+  };
+
+  $$(".doc-tab[data-doc-id]").forEach((tab) => {
     const id = parseInt(tab.dataset.docId, 10);
-    tab.onclick = (e) => {
+    tab.onclick = async (e) => {
       if (e.target.classList.contains("close-tab")) return;
+      if (showStartScreen) enterEditor();
       if (id !== activeDocId) {
-        activeDocId = id;
-        renderDocumentTabs();
+        if (await sync(invoke("switch_drawing", { id }))) {
+          selectedHandles.clear();
+          points = [];
+          chooseTool("select");
+        }
       }
     };
   });
 
   $$(".close-tab").forEach((btn) => {
-    btn.onclick = (e) => {
+    btn.onclick = async (e) => {
       e.stopPropagation();
       const id = parseInt(btn.dataset.closeId, 10);
-      if (openDocuments.length <= 1) {
-        closeCurrentDrawing();
-        return;
-      }
-      openDocuments = openDocuments.filter((d) => d.id !== id);
-      if (activeDocId === id) {
-        activeDocId = openDocuments[openDocuments.length - 1].id;
-      }
-      renderDocumentTabs();
-      draw();
+      await closeDocumentTab(id);
     };
   });
 
   const addBtn = $("#addDocTabBtn");
   if (addBtn) {
     addBtn.onclick = async () => {
-      const newDoc = {
-        id: nextDocId++,
-        title: `Drawing${openDocuments.length + 1}`,
-        path: null,
-        dirty: false
-      };
-      openDocuments.push(newDoc);
-      activeDocId = newDoc.id;
-      await sync(invoke("new_drawing"));
-      renderDocumentTabs();
-      setStatus(currentLang === "vi" ? `Đã tạo bản vẽ mới (${newDoc.title})` : `New drawing created (${newDoc.title})`);
+      if (showStartScreen) {
+        $("#newBtn").click();
+        return;
+      }
+      if (await sync(invoke("new_drawing"))) {
+        selectedHandles.clear();
+        points = [];
+        chooseTool("select");
+        setStatus(currentLang === "vi" ? `Đã tạo bản vẽ mới (${model.title})` : `New drawing created (${model.title})`);
+      }
     };
   }
 }

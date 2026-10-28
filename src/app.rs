@@ -1,5 +1,8 @@
 use crate::document::DrawingDocument;
-use crate::geometry::{Arc2, Point2};
+use crate::geometry::{
+    Arc2, Point2, bulge_geometry, point_arc_distance, point_bulge_segment_distance,
+    point_segment_distance, polyline_metrics,
+};
 use acadrust::entities::{EntityType, LwVertex};
 use acadrust::types::{Handle, Vector2, Vector3};
 use eframe::egui::{self, Align, Color32, Id, Layout, Pos2, Rect, Sense, Stroke, Vec2, WidgetText};
@@ -1822,38 +1825,9 @@ fn entity_extent_points(entity: &EntityType) -> Vec<Point2> {
             points
         }
         EntityType::LwPolyline(polyline) => {
-            let vertices = &polyline.vertices;
-            let mut points = vertices
-                .iter()
-                .map(|vertex| Point2::new(vertex.location.x, vertex.location.y))
-                .collect::<Vec<_>>();
-            let count = if polyline.is_closed {
-                vertices.len()
-            } else {
-                vertices.len().saturating_sub(1)
-            };
-            for index in 0..count {
-                let a = &vertices[index];
-                let b = &vertices[(index + 1) % vertices.len()];
-                let p0 = Point2::new(a.location.x, a.location.y);
-                let p1 = Point2::new(b.location.x, b.location.y);
-                if let Some((center, radius, start, sweep)) = bulge_geometry(p0, p1, a.bulge) {
-                    for angle in [
-                        0.0,
-                        std::f64::consts::FRAC_PI_2,
-                        std::f64::consts::PI,
-                        3.0 * std::f64::consts::FRAC_PI_2,
-                    ] {
-                        if angle_on_sweep(angle, start, sweep) {
-                            points.push(Point2::new(
-                                center.x + radius * angle.cos(),
-                                center.y + radius * angle.sin(),
-                            ));
-                        }
-                    }
-                }
-            }
-            points
+            polyline_metrics(&polyline.vertices, polyline.is_closed)
+                .map(|metrics| vec![metrics.bounds.min, metrics.bounds.max])
+                .unwrap_or_default()
         }
         _ => Vec::new(),
     }
@@ -2397,38 +2371,19 @@ fn entity_pick_distance(entity: &EntityType, p: Point2) -> Option<f64> {
         return None;
     }
     let distance = match entity {
-        EntityType::Line(l) => Some(point_segment_distance(
+        EntityType::Line(l) => point_segment_distance(
             p,
             Point2::new(l.start.x, l.start.y),
             Point2::new(l.end.x, l.end.y),
-        )),
+        ),
         EntityType::Arc(a) => {
-            if !a.center.x.is_finite()
-                || !a.center.y.is_finite()
-                || !a.radius.is_finite()
-                || a.radius <= 0.0
-                || !a.start_angle.is_finite()
-                || !a.end_angle.is_finite()
-            {
-                return None;
-            }
-            let r = Point2::new(a.center.x, a.center.y).distance(p);
-            let ang = (p.y - a.center.y).atan2(p.x - a.center.x);
-            let sweep = (a.end_angle - a.start_angle).rem_euclid(std::f64::consts::TAU);
-            let along = (ang - a.start_angle).rem_euclid(std::f64::consts::TAU) <= sweep;
-            let start = Point2::new(
-                a.center.x + a.radius * a.start_angle.cos(),
-                a.center.y + a.radius * a.start_angle.sin(),
-            );
-            let end = Point2::new(
-                a.center.x + a.radius * a.end_angle.cos(),
-                a.center.y + a.radius * a.end_angle.sin(),
-            );
-            Some(if along {
-                (r - a.radius).abs()
-            } else {
-                p.distance(start).min(p.distance(end))
-            })
+            point_arc_distance(
+                p,
+                Point2::new(a.center.x, a.center.y),
+                a.radius,
+                a.start_angle,
+                a.end_angle,
+            )
         }
         EntityType::LwPolyline(poly) => {
             let vs = &poly.vertices;
@@ -2461,45 +2416,7 @@ fn entity_pick_distance(entity: &EntityType, p: Point2) -> Option<f64> {
 }
 
 fn bulge_segment_distance(p: Point2, a: Point2, b: Point2, bulge: f64) -> f64 {
-    if !p.x.is_finite()
-        || !p.y.is_finite()
-        || !a.x.is_finite()
-        || !a.y.is_finite()
-        || !b.x.is_finite()
-        || !b.y.is_finite()
-        || !bulge.is_finite()
-    {
-        return f64::INFINITY;
-    }
-    if bulge.abs() < 1e-10 {
-        return point_segment_distance(p, a, b);
-    }
-    let dx = b.x - a.x;
-    let dy = b.y - a.y;
-    let chord = dx.hypot(dy);
-    if chord == 0.0 {
-        return p.distance(a);
-    }
-    let sweep = 4.0 * bulge.atan();
-    let radius = chord / (2.0 * (sweep.abs() / 2.0).sin());
-    let offset = chord / (2.0 * (sweep / 2.0).tan());
-    let cx = (a.x + b.x) / 2.0 - dy / chord * offset;
-    let cy = (a.y + b.y) / 2.0 + dx / chord * offset;
-    if !radius.is_finite() || radius <= 0.0 || !cx.is_finite() || !cy.is_finite() {
-        return f64::INFINITY;
-    }
-    let angle = (p.y - cy).atan2(p.x - cx);
-    let start = (a.y - cy).atan2(a.x - cx);
-    let delta = if sweep >= 0.0 {
-        (angle - start).rem_euclid(std::f64::consts::TAU)
-    } else {
-        (start - angle).rem_euclid(std::f64::consts::TAU)
-    };
-    if delta <= sweep.abs() {
-        (Point2::new(cx, cy).distance(p) - radius).abs()
-    } else {
-        p.distance(a).min(p.distance(b))
-    }
+    point_bulge_segment_distance(p, a, b, bulge).unwrap_or(f64::INFINITY)
 }
 
 #[derive(Clone, Copy)]
@@ -2672,31 +2589,6 @@ fn segment_intersection(a: Point2, b: Point2, c: Point2, d: Point2) -> Option<Po
         .then_some(Point2::new(a.x + t * rx, a.y + t * ry))
 }
 
-fn bulge_geometry(a: Point2, b: Point2, bulge: f64) -> Option<(Point2, f64, f64, f64)> {
-    if bulge.abs() < 1e-10 {
-        return None;
-    }
-    let dx = b.x - a.x;
-    let dy = b.y - a.y;
-    let chord = dx.hypot(dy);
-    if chord == 0.0 {
-        return None;
-    }
-    let sweep = 4.0 * bulge.atan();
-    let radius = chord / (2.0 * (sweep.abs() / 2.0).sin());
-    let offset = chord / (2.0 * (sweep / 2.0).tan());
-    let center = Point2::new(
-        (a.x + b.x) * 0.5 - dy / chord * offset,
-        (a.y + b.y) * 0.5 + dx / chord * offset,
-    );
-    Some((
-        center,
-        radius,
-        (a.y - center.y).atan2(a.x - center.x),
-        sweep,
-    ))
-}
-
 fn split_bulge_segment(a: Point2, b: Point2, bulge: f64) -> Option<(Point2, f64)> {
     if !a.x.is_finite() || !a.y.is_finite() || !b.x.is_finite() || !b.y.is_finite() || a == b {
         return None;
@@ -2752,17 +2644,6 @@ fn draw_snap_marker(painter: &egui::Painter, pos: Pos2, kind: SnapKind) {
             );
         }
     }
-}
-
-fn point_segment_distance(p: Point2, a: Point2, b: Point2) -> f64 {
-    let dx = b.x - a.x;
-    let dy = b.y - a.y;
-    let d = dx * dx + dy * dy;
-    if d == 0.0 {
-        return p.distance(a);
-    }
-    let t = (((p.x - a.x) * dx + (p.y - a.y) * dy) / d).clamp(0.0, 1.0);
-    p.distance(Point2::new(a.x + t * dx, a.y + t * dy))
 }
 
 fn world_to_screen(point: Point2, rect: Rect, zoom: f32, center: Point2) -> Pos2 {

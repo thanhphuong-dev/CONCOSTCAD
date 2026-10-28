@@ -1,28 +1,21 @@
-# MA TRẬN TƯƠNG THÍCH ĐỊNH DẠNG & THỰC THỂ CONCOSTCAD 1.0
-(CONCOSTCAD 1.0 COMPATIBILITY & ENTITY MATRIX)
+# Ma trận tương thích định dạng & thực thể CONCOSTCAD
 
-Tài liệu công bố chính thức về mức độ tương thích định dạng tệp tin, thực thể hình học, siêu dữ liệu (metadata) và hành vi bảo toàn dữ liệu của CONCOSTCAD phiên bản 1.0.
+Đây là ma trận trạng thái phát triển, chưa phải cam kết tương thích CONCOSTCAD 1.0. Chỉ nâng một hàng lên **Đã xác minh** khi có fixture hợp pháp, so sánh semantic round-trip và kết quả mở bằng CAD tham chiếu.
 
 ---
 
 ## 1. MA TRẬN ĐỊNH DẠNG TỆP TIN (FILE FORMAT MATRIX)
 
-| Định dạng | Phiên bản AutoCAD | Mở (Read) | Chỉnh sửa (Edit) | Lưu (Save) | Giai đoạn lưu trữ an toàn |
+| Định dạng | Phiên bản | Đọc trong code | Chỉnh sửa trong code | Ghi trong code | Bằng chứng tương thích |
 |---|---|---|---|---|---|
-| **DXF** | R12 (AC1009) | Đầy đủ | Đầy đủ | Đầy đủ | Ghi nguyên tử (Atomic staging via `.tmp`) |
-| **DXF** | 2000/2002 (AC1015) | Đầy đủ | Đầy đủ | Đầy đủ | Ghi nguyên tử |
-| **DXF** | 2004/2006 (AC1018) | Đầy đủ | Đầy đủ | Đầy đủ | Ghi nguyên tử |
-| **DXF** | 2007/2009 (AC1021) | Đầy đủ | Đầy đủ | Đầy đủ | Ghi nguyên tử |
-| **DXF** | 2010/2012 (AC1024) | Đầy đủ | Đầy đủ | Đầy đủ | Ghi nguyên tử |
-| **DXF** | 2013/2017 (AC1027) | Đầy đủ | Đầy đủ | Đầy đủ | Ghi nguyên tử |
-| **DXF** | 2018+ (AC1032) | Đầy đủ | Đầy đủ | Đầy đủ | Ghi nguyên tử |
-| **DWG** | R14 (AC1014) | Đầy đủ | Đầy đủ | Đầy đủ | Ghi nguyên tử bảo toàn |
-| **DWG** | 2000 (AC1015) | Đầy đủ | Đầy đủ | Đầy đủ | Ghi nguyên tử bảo toàn |
-| **DWG** | 2004 (AC1018) | Đầy đủ | Đầy đủ | Đầy đủ | Ghi nguyên tử bảo toàn |
-| **DWG** | 2007 (AC1021) | Đầy đủ | Đầy đủ | Đầy đủ | Ghi nguyên tử bảo toàn |
-| **DWG** | 2010 (AC1024) | Đầy đủ | Đầy đủ | Đầy đủ | Ghi nguyên tử bảo toàn |
-| **DWG** | 2013 (AC1027) | Đầy đủ | Đầy đủ | Đầy đủ | Ghi nguyên tử bảo toàn |
-| **DWG** | 2018+ (AC1032) | Đầy đủ | Đầy đủ | Đầy đủ | Ghi nguyên tử bảo toàn |
+| DXF | R12 (AC1009) | Có API reader | Model hiện có thể sửa | Có API writer + staging | Chưa xác minh theo version |
+| DXF | 2000/2002 (AC1015) | Có API reader | Model hiện có thể sửa | Có API writer + staging | Chưa xác minh theo version |
+| DXF | 2004/2006 (AC1018) | Có API reader | Model hiện có thể sửa | Có API writer + staging | Chưa xác minh theo version |
+| DXF | 2007/2009 (AC1021) | Có API reader | Model hiện có thể sửa | Có API writer + staging | Chưa xác minh theo version |
+| DXF | 2010/2012 (AC1024) | Có API reader | Model hiện có thể sửa | Có API writer + staging | Chưa xác minh theo version |
+| DXF | 2013/2017 (AC1027) | Có API reader | Model hiện có thể sửa | Có API writer + staging | Chưa xác minh theo version |
+| DXF | 2018+ (AC1032) | Có API reader | Model hiện có thể sửa | Có API writer + staging | Chưa xác minh theo version |
+| DWG | R14–R2018+ | Có API `DwgReader` | Model hiện có thể sửa | Có API `DwgWriter` + staging/read-back guard | Chưa có corpus DWG và CAD tham chiếu; mọi version chưa xác minh |
 
 ---
 
@@ -30,20 +23,18 @@ Tài liệu công bố chính thức về mức độ tương thích định d�
 
 | Thực thể CAD | Hiển thị (Render) | Tạo mới (Create) | Chỉnh sửa trực tiếp (Grip/Props) | Phép biến đổi 2D (Move/Copy/Rot/Mir) | Khứ hồi DWG/DXF (Round-Trip) |
 |---|---|---|---|---|---|
-| **LINE** | Có (BYLAYER) | Chuột / Tọa độ | Tọa độ điểm đầu/cuối, midpoint | Đầy đủ (Atomic) | Bảo toàn 100% |
-| **ARC** | Có (Tessellation mượt) | 3 điểm (Start, Mid, End) | Bán kính, tâm, góc quét | Đầy đủ (Atomic) | Bảo toàn 100% |
-| **CIRCLE** | Có (Grip 4 góc phần tư) | Tâm + Bán kính | Tâm, bán kính, chu vi, diện tích | Đầy đủ (Atomic) | Bảo toàn 100% |
-| **LWPOLYLINE** | Có (Hỗ trợ đoạn cong bulge) | Chuột liên tiếp / Đóng kín | Từng đỉnh, thêm đỉnh, bulge | Đầy đủ (Atomic) | Bảo toàn 100% |
-| **TEXT** | Có (Inter Font sắc nét) | Điểm chèn, chiều cao, góc | Nội dung chữ, chiều cao, góc xoay | Đầy đủ (Atomic) | Bảo toàn 100% |
-| **INSERT (Block)** | Có (Marker + Tên Block) | Nhận diện từ file gốc | Tên block, điểm chèn, tỷ lệ, góc | Đầy đủ (Atomic) | Bảo toàn 100% |
-| **DIMENSION** | Có (Đường gióng + Tick + Text)| 2 điểm đo + Offset | Tọa độ, độ dời, nội dung đo | Đầy đủ (Atomic) | Bảo toàn 100% |
+| **LINE** | Implemented | Chuột / Tọa độ | Tọa độ đầu/cuối | Implemented | Chưa xác minh trên DWG mẫu/CAD tham chiếu |
+| **ARC** | Implemented | 3 điểm | Tâm, bán kính, góc | Implemented | Chưa xác minh trên DWG mẫu/CAD tham chiếu |
+| **CIRCLE** | Implemented | Tâm + bán kính | Tâm, bán kính | Implemented | Chưa xác minh trên DWG mẫu/CAD tham chiếu |
+| **LWPOLYLINE** | Implemented, gồm bulge | Chuột / command line | Model có vertex/bulge | Implemented | Chưa xác minh trên DWG mẫu/CAD tham chiếu |
+| **TEXT / INSERT / DIMENSION** | Implemented một phần | Theo các command hiện có | Theo entity subset | Một phần | Chưa xác minh theo version/entity |
 
 ---
 
 ## 3. BẢO TOÀN DỮ LIỆU & HÀNH VI XỬ LÝ ĐỐI TƯỢNG NGOÀI PHẠM VI (LOSS BEHAVIOR)
 
 - **Nguyên tắc không làm hỏng dữ liệu:** Mọi thao tác lưu đều qua tệp tạm (staging file), kiểm tra tính toàn vẹn trước khi thay thế tệp gốc.
-- **Opaque Entity Preservation:** Các đối tượng nâng cao (như 3D Solid, Region, Viewport Paper Space) khi đọc từ tệp DWG/DXF được engine `acadrust` duy trì trong cấu trúc bản vẽ và ghi lại nguyên trạng (không bị xóa bỏ âm thầm).
+- **Opaque entity/object:** Trước khi lưu, giao diện liệt kê Unknown entity/object và diagnostic `NotImplemented`/`NotSupported`/`Error`, yêu cầu xác nhận. Backend chặn lưu nếu thiếu raw data cho định dạng đích hoặc DWG raw version không trùng version đích. File staging phải qua semantic-inventory read-back trước khi thay file nguồn. Việc bảo toàn thực tế của 3D Solid, Region, viewport, XDATA/EED và object graph vẫn chưa được xác minh bằng fixture.
 - **Cảnh báo chuyển đổi định dạng (Save As warning):** Khi lưu từ định dạng này sang định dạng khác, phần mềm ngăn chặn thao tác chuyển đổi định dạng nếu có nguy cơ làm mất mát metadata chưa được kiểm chứng.
 
 ---

@@ -11,8 +11,8 @@ npm run tauri dev
 
 ## Current Tauri build
 
-The app can create a new drawing, open and save DWG/DXF through `acadrust`, draw LINE, three-point ARC, and LWPOLYLINE by clicking the canvas, and undo. The canvas supports wheel zoom and panning. The frontend is in `src-ui/`; Tauri commands and the reusable drawing model are in `src/main.rs` and `src/document.rs`.
+The app can open and save DWG/DXF through `acadrust`, draw and edit common 2D entities, use layers, dimensions, measurement tools, and undo/redo. The frontend is in `src-ui/`; Tauri commands and the drawing model are in `src/main.rs` and `src/document.rs`. Each drawing tab now has its own Rust document and undo history.
 
-The earlier egui interface contains more CAD workflows than are currently connected to the new Tauri UI. Selection, Move, Erase, editable Properties, layer controls, bulge-arc rendering, and full command-line point input still need migration. DWG/DXF interoperability has not been accepted against a real customer drawing corpus or a reference CAD application.
+Dirty drawings are backed up every three minutes under `%LOCALAPPDATA%\CONCOSTCAD\Autosave` while the application is running. The backup contains drawing data; it does not clear the unsaved indicator or replace an explicit Save. DWG/DXF interoperability has automated corpus checks but still needs acceptance against representative customer files and a reference CAD application.
 
 Build checks: `npm run build` and `cargo check`. See [the status matrix](docs/STATUS_MATRIX.md) and [the Rust development plan](docs/RUST_DEVELOPMENT_PLAN.md).

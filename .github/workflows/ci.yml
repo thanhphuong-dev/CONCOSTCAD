@@ -28,7 +28,13 @@ jobs:
       - name: Build Frontend (Vite)
         run: npm run build
 
-      - name: Run Cargo Test Suite (10 Automated Tests)
+      - name: Check Rust Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check Rust Lints
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run Cargo Test Suite
         run: cargo test --verbose
 
       - name: Check Rust Code Quality
