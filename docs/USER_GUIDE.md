@@ -15,7 +15,7 @@ Chào mừng bạn đến với **CONCOSTCAD** – Phần mềm đồ họa kỹ
 - **Vùng vẽ (Canvas Viewport):** Không gian mô hình (Model Space) 2D với hệ trục tọa độ UCS và lưới điểm thông minh.
 - **Bảng thuộc tính trực tiếp (Live Properties Panel):** Cho phép xem và chỉnh sửa ngay lập tức tọa độ, kích thước, bán kính, góc xoay, lớp (layer) của đối tượng đang chọn.
 - **Bảng quản lý lớp (Layers Panel):** Thêm layer, kích hoạt layer hiện hành, bật/tắt hiển thị, khóa chỉnh sửa, và chọn màu hiển thị (BYLAYER).
-- **Thanh dòng lệnh (Command Bar):** Nhập lệnh CAD truyền thống, tọa độ tuyệt đối/tương đối, khoảng cách và góc.
+- **Thanh dòng lệnh (Command Bar):** Nhập lệnh CAD, tọa độ tuyệt đối (`x,y`), tương đối (`@dx,dy`) hoặc cực (`@khoảng_cách<góc`); hỗ trợ số có dấu và dạng thập phân `.5`, `1.`. Dynamic Input và dòng lệnh dùng cùng parser.
 - **Thanh trạng thái (Status Bar):** Tọa độ con trỏ thời gian thực, nút chuyển đổi Lưới (Grid), Bắt điểm (Osnap - F3), Chế độ góc vuông (Ortho - F8), Tỷ lệ thu phóng (Zoom %).
 
 ---
@@ -75,7 +75,7 @@ Khi đang sửa ô Properties, tên lớp hoặc dòng lệnh, Backspace/Delete 
 
 ### D. Lệnh điều khiển vùng nhìn & Xuất bản vẽ (View & Export)
 - **ViewCube 2D (góc trên bên phải):** Nhấp N/E/S/W để đưa hướng đó lên trên. Nhấp mặt TOP để trở về hướng Bắc, giữ nguyên tâm nhìn và độ thu phóng. Kéo ngang mặt TOP hoặc vòng la bàn để xoay góc nhìn liên tục; thả chuột để giữ góc, nhấn Escape trong khi kéo để trở về góc ban đầu. Các nút ↶/↷ xoay vùng nhìn 90°. Nút Home (hình ngôi nhà) đưa hướng Bắc lên trên và thu phóng vừa các đối tượng đang hiển thị; bản vẽ trống trở về tâm gốc và zoom 1:1. Khi mặt TOP có focus, dùng ←/→ để xoay 15°, Shift + ←/→ để xoay 45°, phím Home để về hướng Bắc. La bàn, số đo góc và biểu tượng trục WCS cập nhật theo góc nhìn. Đây là điều khiển góc nhìn trên mặt phẳng XY, không sửa tọa độ đối tượng hoặc tạo lịch sử Undo.
-- **Dynamic Input (F12):** Bật/tắt prompt, tọa độ và ô nhập cạnh con trỏ. Khi đã đặt điểm, bảng còn hiển thị chiều dài/góc đoạn hiện tại; với CIRCLE hiển thị bán kính và với RECTANGLE hiển thị ΔX/ΔY. Gõ lệnh hoặc tọa độ vào ô này rồi nhấn Enter; LINE/PLINE nhận chiều dài theo hướng con trỏ, còn CIRCLE nhận bán kính. Nội dung đi qua cùng luồng lệnh của dòng lệnh phía dưới.
+- **Dynamic Input (F12):** Bật/tắt prompt, tọa độ và ô nhập cạnh con trỏ. Khi đã đặt điểm, bảng còn hiển thị chiều dài/góc đoạn hiện tại; với CIRCLE hiển thị bán kính và với RECTANGLE hiển thị ΔX/ΔY. Khi viewport đang focus, con trỏ ở vùng vẽ và có lệnh đang chạy, có thể gõ trực tiếp mà không cần nhấp ô trước; cũng có thể nhấp vào ô để sửa nội dung. Bản nháp được đồng bộ tức thời với Dòng lệnh, nên có thể chuyển vùng nhập bằng Ctrl+9 mà không mất nội dung. Enter gửi lệnh/tọa độ qua cùng parser của dòng lệnh; LINE/PLINE nhận chiều dài theo hướng con trỏ, còn CIRCLE nhận bán kính.
 - **Command Line (Ctrl+9):** Ẩn/hiện dòng lệnh; trạng thái hiển thị được lưu. Có thể bật lại bằng Ctrl+9 hoặc nút Command Line trong tab View. Dùng ↑/↓ để duyệt tối đa 50 lệnh đã nhập; nhấn một dòng lệnh trong lịch sử để nạp lại vào ô nhập. Lịch sử lệnh được giữ qua lần khởi động tiếp theo.
 - **Alias lệnh:** Lệnh không phân biệt chữ hoa/thường. Một số alias bổ sung: `QNEW`/`QSAVE`, `ZE`/`ZOOM EXTENTS`, `ZS`/`ZO`/`ZOOM OBJECT`, `PLOT`/`PRINT`, `DYN`/`DYNAMIC INPUT`, `CMDLINE`/`COMMAND LINE`, `CANCEL`/`ESC` và `HELP`. `U` gọi UNDO; khi PLINE đang chạy, `U` lùi một đỉnh và `C` khép kín đa tuyến.
 - **ZOOM EXTENTS (`ZE`):** Tự động thu phóng và căn chỉnh toàn bộ hình vẽ vừa vặn màn hình.

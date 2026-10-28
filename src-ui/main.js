@@ -9,6 +9,10 @@ import "./style.css";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
+const CAD_COORDINATE_NUMBER = "[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)";
+const RELATIVE_POLAR_COORDINATE_PATTERN = new RegExp(`^@?(${CAD_COORDINATE_NUMBER})\\s*<\\s*(${CAD_COORDINATE_NUMBER})$`);
+const RELATIVE_CARTESIAN_COORDINATE_PATTERN = new RegExp(`^@(${CAD_COORDINATE_NUMBER})\\s*,\\s*(${CAD_COORDINATE_NUMBER})$`);
+const ABSOLUTE_COORDINATE_PATTERN = new RegExp(`^(${CAD_COORDINATE_NUMBER})\\s*,\\s*(${CAD_COORDINATE_NUMBER})(?:\\s*,\\s*b=(${CAD_COORDINATE_NUMBER}))?$`, "i");
 
 // Rust owns the drawing model. Serialize bridge calls in dispatch order so a
 // slower older response cannot overwrite a newer CAD snapshot in the UI.
@@ -105,10 +109,19 @@ let currentTheme = savedTheme === "light" ? "light" : "dark";
 document.documentElement.dataset.theme = currentTheme;
 
 const t = (key) => translate(currentLang, key);
+const tf = (key, values = {}) => Object.entries(values).reduce(
+  (message, [name, value]) => message.replaceAll(`{${name}}`, () => String(value)),
+  t(key)
+);
+function syncCommandInputDraft(sourceInput) {
+  if (!sourceInput) return;
+  const commandInput = $("#commandInput");
+  const dynamicInputEntry = $("#dynamicInputEntry");
+  const targetInput = sourceInput === commandInput ? dynamicInputEntry : commandInput;
+  if (targetInput && targetInput.value !== sourceInput.value) targetInput.value = sourceInput.value;
+}
 function languageControlLabel() {
-  if (currentLang === "vi") return "Đổi ngôn ngữ";
-  if (currentLang === "ko") return "언어 변경";
-  return "Change language";
+  return t("language_control");
 }
 
 function cycleLanguage(language) {
@@ -203,10 +216,12 @@ function rememberRecentDrawing(path) {
 }
 
 function ribbonModeLabel(mode = ribbonDisplayMode) {
-  const labels = currentLang === "vi"
-    ? { expanded: "Ribbon đầy đủ", panels: "Chỉ hiện tên panel", tabs: "Chỉ hiện các tab" }
-    : { expanded: "Full ribbon", panels: "Panel titles only", tabs: "Tabs only" };
-  return labels[mode];
+  const labels = {
+    expanded: t("ribbon_mode_expanded"),
+    panels: t("ribbon_mode_panels"),
+    tabs: t("ribbon_mode_tabs"),
+  };
+  return labels[mode] || t("ribbon_mode_expanded");
 }
 
 function ribbonModeIcon(mode = ribbonDisplayMode) {
@@ -331,9 +346,7 @@ function renderShell() {
   const shellTitle = showStartScreen
     ? "CONCOSTCAD"
     : ((model.title || "Drawing1").split(/[\\/]/).pop().replace(/\.(dwg|dxf)$/i, "") || "Drawing1");
-  const shellStatus = showStartScreen
-    ? (currentLang === "vi" ? "Sẵn sàng · Start" : "Ready · Start")
-    : t("ready_status");
+  const shellStatus = showStartScreen ? t("shell_ready_start") : t("ready_status");
   const recentMarkup = recent.length
     ? recent.map((path) => {
         const filename = path.split(/[\\/]/).pop();
@@ -345,12 +358,12 @@ function renderShell() {
             <span class="recent-meta"><strong>${escapeHtml(filename)}</strong><small>${escapeHtml(path)}</small></span>
           </button>
           <details class="recent-actions">
-            <summary class="recent-more" title="${currentLang === "vi" ? `Tùy chọn ${escapeHtml(filename)}` : `Options for ${escapeHtml(filename)}`}" aria-label="${currentLang === "vi" ? `Tùy chọn ${escapeHtml(filename)}` : `Options for ${escapeHtml(filename)}`}">•••</summary>
-            <div class="recent-actions-menu"><button type="button" data-remove-recent="${escapeHtml(path)}">${currentLang === "vi" ? "Xóa khỏi danh sách gần đây" : "Remove from Recent"}</button></div>
+            <summary class="recent-more" title="${t("recent_options")} ${escapeHtml(filename)}" aria-label="${t("recent_options")} ${escapeHtml(filename)}">•••</summary>
+            <div class="recent-actions-menu"><button type="button" data-remove-recent="${escapeHtml(path)}">${t("recent_remove")}</button></div>
           </details>
         </article>`;
       }).join("")
-    : `<div class="start-empty"><span class="start-empty-icon" aria-hidden="true">▧</span><strong>${currentLang === "vi" ? "Chưa có bản vẽ gần đây" : "No recent drawings"}</strong><span>${currentLang === "vi" ? "Mở DWG/DXF hoặc tạo bản vẽ mới để bắt đầu." : "Open a DWG/DXF or create a new drawing to get started."}</span><div class="start-empty-actions"><button id="emptyStartNew">${currentLang === "vi" ? "Bản vẽ mới" : "New Drawing"}</button><button id="emptyStartOpen">${currentLang === "vi" ? "Mở tệp..." : "Open File..."}</button></div></div>`;
+    : `<div class="start-empty"><span class="start-empty-icon" aria-hidden="true">▧</span><strong>${t("recent_empty_title")}</strong><span>${t("recent_empty_description")}</span><div class="start-empty-actions"><button id="emptyStartNew">${t("start_new")}</button><button id="emptyStartOpen">${t("start_open")}</button></div></div>`;
   const menuRecentMarkup = recent.slice(0, 9).map((path, index) => {
     const filename = path.split(/[\\/]/).pop();
     return `<button class="menu-recent" type="button" data-menu-recent="${escapeHtml(path)}"><span>${index + 1} ${escapeHtml(filename)}</span></button>`;
@@ -363,7 +376,7 @@ function renderShell() {
     <header class="titlebar">
       <img class="brand-mark" src="/CONCOST.ico" alt="CONCOSTCAD" data-tauri-drag-region>
       <div class="title-divider" data-tauri-drag-region></div>
-      <div class="top-quick-access" role="toolbar" aria-label="${currentLang === "vi" ? "Truy cập nhanh" : "Quick access"}">
+      <div class="top-quick-access" role="toolbar" aria-label="${t("quick_access_aria")}">
         <button class="quick-access-button" id="newBtn" data-quick-access="newBtn" ${quickAccessVisibility.newBtn ? "" : "hidden"} title="${t("new_btn")}" aria-label="${t("new_btn")}">${cadIcon("new")}</button>
         <button class="quick-access-button" id="openBtn" data-quick-access="openBtn" ${quickAccessVisibility.openBtn ? "" : "hidden"} title="${t("open_btn")}" aria-label="${t("open_btn")}">${cadIcon("open")}</button>
         <span class="quick-access-divider" data-qat-divider="files" ${((quickAccessVisibility.newBtn || quickAccessVisibility.openBtn) && quickAccessVisibility.topSaveBtn) ? "" : "hidden"} aria-hidden="true"></span>
@@ -372,10 +385,10 @@ function renderShell() {
         <button class="quick-access-button" id="topUndoBtn" data-quick-access="topUndoBtn" ${quickAccessVisibility.topUndoBtn ? "" : "hidden"} title="${t("tool_undo")}" aria-label="${t("tool_undo")}">${cadIcon("undo")}</button>
         <button class="quick-access-button" id="topRedoBtn" data-quick-access="topRedoBtn" ${quickAccessVisibility.topRedoBtn ? "" : "hidden"} title="${t("tool_redo")}" aria-label="${t("tool_redo")}">${cadIcon("redo")}</button>
         <details class="app-menu quick-access-customize">
-          <summary class="quick-access-caret" title="${currentLang === "vi" ? "Tùy chỉnh thanh truy cập nhanh" : "Customize Quick Access Toolbar"}" aria-label="${currentLang === "vi" ? "Tùy chỉnh thanh truy cập nhanh" : "Customize Quick Access Toolbar"}">⌄</summary>
+          <summary class="quick-access-caret" title="${t("quick_access_customize")}" aria-label="${t("quick_access_customize")}">⌄</summary>
           <div class="menu-popup quick-access-popup">
-            <strong>${currentLang === "vi" ? "Tùy chỉnh thanh truy cập nhanh" : "Customize Quick Access Toolbar"}</strong>
-            ${[["newBtn", currentLang === "vi" ? "Bản vẽ mới" : "New Drawing"], ["openBtn", currentLang === "vi" ? "Mở DWG/DXF" : "Open DWG/DXF"], ["topSaveBtn", currentLang === "vi" ? "Lưu" : "Save"], ["topUndoBtn", currentLang === "vi" ? "Hoàn tác" : "Undo"], ["topRedoBtn", currentLang === "vi" ? "Làm lại" : "Redo"]].map(([id, label]) => `<label><input type="checkbox" data-quick-access-toggle="${id}" ${quickAccessVisibility[id] ? "checked" : ""}><span>${label}</span></label>`).join("")}
+            <strong>${t("quick_access_customize")}</strong>
+            ${[["newBtn", t("start_new")], ["openBtn", t("open_btn").replace(/^▣\s*/, "")], ["topSaveBtn", t("tool_save")], ["topUndoBtn", t("tool_undo")], ["topRedoBtn", t("tool_redo")]].map(([id, label]) => `<label><input type="checkbox" data-quick-access-toggle="${id}" ${quickAccessVisibility[id] ? "checked" : ""}><span>${label}</span></label>`).join("")}
           </div>
         </details>
       </div>
@@ -385,70 +398,70 @@ function renderShell() {
       <button class="title-action" id="langToggleBtn" style="height:22px; padding:0 8px; font-weight:700; color:#8fe2f3; background:#1b3846;" title="${languageControlLabel()}" aria-label="${languageControlLabel()}">${currentLang.toUpperCase()}</button>
       <div class="edition" data-tauri-drag-region>${t("brand_sub")}</div>
       <div class="window-controls">
-        <button aria-label="Minimize" id="minimizeBtn">−</button>
-        <button aria-label="Maximize" id="maximizeBtn">□</button>
-        <button aria-label="Close" id="closeBtn">×</button>
+        <button aria-label="${t("title_minimize")}" id="minimizeBtn">−</button>
+        <button aria-label="${t("title_maximize")}" id="maximizeBtn">□</button>
+        <button aria-label="${t("title_close")}" id="closeBtn">×</button>
       </div>
     </header>
-    <nav class="menubar" aria-label="Application menu">
+    <nav class="menubar" aria-label="${t("app_menu_aria")}">
       <details class="app-menu">
-        <summary class="menu-trigger">File</summary>
+        <summary class="menu-trigger">${t("menu_file")}</summary>
         <div class="menu-popup file-menu-popup">
-          <button id="menuNewDrawing"><span>New...</span><kbd>Ctrl+N</kbd></button>
-          <button id="menuOpenDrawing"><span>Open...</span><kbd>Ctrl+O</kbd></button>
-          <button type="button" disabled><span>Open Sheet Set...</span></button>
-          <button type="button" disabled><span>Open File From Cloud...</span></button>
-          <button type="button" disabled><span>Sheet Set Manager...</span></button>
-          <button type="button" disabled><span>Recover...</span></button>
-          <button type="button" disabled><span>Drawing Recovery Manager...</span></button>
-          <button type="button" disabled><span>DWG Convert...</span></button>
+          <button id="menuNewDrawing"><span>${t("menu_new")}</span><kbd>Ctrl+N</kbd></button>
+          <button id="menuOpenDrawing"><span>${t("menu_open")}</span><kbd>Ctrl+O</kbd></button>
+          <button type="button" disabled><span>${t("menu_open_sheet_set")}</span></button>
+          <button type="button" disabled><span>${t("menu_open_cloud")}</span></button>
+          <button type="button" disabled><span>${t("menu_sheet_set_manager")}</span></button>
+          <button type="button" disabled><span>${t("menu_recover")}</span></button>
+          <button type="button" disabled><span>${t("menu_recovery_manager")}</span></button>
+          <button type="button" disabled><span>${t("menu_dwg_convert")}</span></button>
           <div class="menu-separator"></div>
-          <button id="menuFileCloseDrawing" ${showStartScreen ? "disabled" : ""}><span>Close</span></button>
-          <button id="menuSaveDrawing" ${showStartScreen ? "disabled" : ""}><span>Save</span><kbd>Ctrl+S</kbd></button>
-          <button id="menuSaveAsDrawing" ${showStartScreen ? "disabled" : ""}><span>Save As...</span></button>
+          <button id="menuFileCloseDrawing" ${showStartScreen ? "disabled" : ""}><span>${t("menu_close")}</span></button>
+          <button id="menuSaveDrawing" ${showStartScreen ? "disabled" : ""}><span>${t("menu_save")}</span><kbd>Ctrl+S</kbd></button>
+          <button id="menuSaveAsDrawing" ${showStartScreen ? "disabled" : ""}><span>${t("menu_save_as")}</span></button>
           <div class="menu-separator"></div>
-          <button type="button" disabled><span>Print</span><kbd>Ctrl+P</kbd></button>
+          <button type="button" disabled><span>${t("menu_print")}</span><kbd>Ctrl+P</kbd></button>
           ${menuRecentMarkup ? `<div class="menu-separator"></div>${menuRecentMarkup}` : ""}
           <div class="menu-separator"></div>
-          <button id="menuExit"><span>Exit</span><kbd>Alt+F4</kbd></button>
+          <button id="menuExit"><span>${t("menu_exit")}</span><kbd>Alt+F4</kbd></button>
         </div>
       </details>
       <details class="app-menu">
-        <summary class="menu-trigger">Window</summary>
+        <summary class="menu-trigger">${t("menu_window")}</summary>
         <div class="menu-popup">
-          <button id="menuCloseDrawing" ${showStartScreen ? "disabled" : ""}><span>Close</span></button>
-          <button id="menuCloseAllDrawings" ${showStartScreen ? "disabled" : ""}><span>Close All</span></button>
+          <button id="menuCloseDrawing" ${showStartScreen ? "disabled" : ""}><span>${t("menu_close")}</span></button>
+          <button id="menuCloseAllDrawings" ${showStartScreen ? "disabled" : ""}><span>${t("menu_close_all")}</span></button>
           <div class="menu-separator"></div>
-          <button type="button" disabled><span>Cascade</span></button>
-          <button type="button" disabled><span>Tile Horizontally</span></button>
-          <button type="button" disabled><span>Tile Vertically</span></button>
-          <button type="button" disabled><span>Arrange Icons</span></button>
+          <button type="button" disabled><span>${t("menu_cascade")}</span></button>
+          <button type="button" disabled><span>${t("menu_tile_horizontal")}</span></button>
+          <button type="button" disabled><span>${t("menu_tile_vertical")}</span></button>
+          <button type="button" disabled><span>${t("menu_arrange_icons")}</span></button>
           ${menuWindowDocs ? `<div class="menu-separator"></div>${menuWindowDocs}` : ""}
           <div class="menu-separator"></div>
           <button id="menuToggleCommandLine" class="${commandbarVisible ? "checked" : ""}"><span>${t("command_line")} <kbd>Ctrl+9</kbd></span><span class="menu-check" aria-hidden="true">${commandbarVisible ? "✓" : ""}</span></button>
-          <button id="menuToggleProperties" class="${paletteVisibility.properties ? "checked" : ""}"><span>Properties palette</span>${paletteVisibility.properties ? "✓" : ""}</button>
-          <button id="menuToggleLayers" class="${paletteVisibility.layers ? "checked" : ""}"><span>Layer palette</span>${paletteVisibility.layers ? "✓" : ""}</button>
+          <button id="menuToggleProperties" class="${paletteVisibility.properties ? "checked" : ""}"><span>${t("menu_properties_palette")}</span>${paletteVisibility.properties ? "✓" : ""}</button>
+          <button id="menuToggleLayers" class="${paletteVisibility.layers ? "checked" : ""}"><span>${t("menu_layers_palette")}</span>${paletteVisibility.layers ? "✓" : ""}</button>
         </div>
       </details>
       <details class="app-menu">
-        <summary class="menu-trigger">Help</summary>
+        <summary class="menu-trigger">${t("menu_help")}</summary>
         <div class="menu-popup">
-          <button id="menuHelp">Help CONCOSTCAD</button>
-          <button id="menuKeyboardHelp">Keyboard shortcuts...</button>
+          <button id="menuHelp">${t("menu_help_page")}</button>
+          <button id="menuKeyboardHelp">${t("menu_keyboard_shortcuts")}</button>
           <div class="menu-separator"></div>
-          <button id="menuAbout">About CONCOSTCAD</button>
+          <button id="menuAbout">${t("menu_about")}</button>
         </div>
       </details>
       <span class="menu-bar-spacer" data-tauri-drag-region></span>
     </nav>
     <nav class="tabs" id="ribbonTabs">
       <button class="tab ${activeRibbonTab==='home'?'active':''}" data-tab="home">${t("tab_home")}</button>
-      <button class="tab ${activeRibbonTab==='draw'?'active':''}" data-tab="draw">Draw</button>
-      <button class="tab ${activeRibbonTab==='annotate'?'active':''}" data-tab="annotate">Annotate</button>
-      <button class="tab ${activeRibbonTab==='view'?'active':''}" data-tab="view">View</button>
-      <button class="tab ${activeRibbonTab==='manage'?'active':''}" data-tab="manage">Manage</button>
-      <button class="tab ${activeRibbonTab==='output'?'active':''}" data-tab="output">Output</button>
-      <button class="ribbon-collapse-toggle" id="ribbonCollapseBtn" aria-label="${currentLang === "vi" ? `Chế độ ribbon: ${ribbonModeLabel()}` : `Ribbon display: ${ribbonModeLabel()}`}" aria-expanded="${ribbonDisplayMode === "expanded"}" title="${currentLang === "vi" ? `Chế độ ribbon: ${ribbonModeLabel()} · nhấn để đổi` : `Ribbon display: ${ribbonModeLabel()} · click to cycle`}">${ribbonModeIcon()}</button>
+      <button class="tab ${activeRibbonTab==='draw'?'active':''}" data-tab="draw">${t("tab_draw")}</button>
+      <button class="tab ${activeRibbonTab==='annotate'?'active':''}" data-tab="annotate">${t("tab_annotate")}</button>
+      <button class="tab ${activeRibbonTab==='view'?'active':''}" data-tab="view">${t("tab_view")}</button>
+      <button class="tab ${activeRibbonTab==='manage'?'active':''}" data-tab="manage">${t("tab_manage")}</button>
+      <button class="tab ${activeRibbonTab==='output'?'active':''}" data-tab="output">${t("tab_output")}</button>
+      <button class="ribbon-collapse-toggle" id="ribbonCollapseBtn" aria-label="${t("ribbon_display_aria").replace("{mode}", ribbonModeLabel())}" aria-expanded="${ribbonDisplayMode === "expanded"}" title="${t("ribbon_display_title").replace("{mode}", ribbonModeLabel())}">${ribbonModeIcon()}</button>
       <span class="space-label">${t("space_label")}</span>
     </nav>
     <section class="ribbon" id="ribbonContainer"></section>
@@ -489,7 +502,7 @@ function renderShell() {
             </div>
             <input id="dynamicInputEntry" autocomplete="off" placeholder="${t("dynamic_input_placeholder")}" aria-label="${t("dynamic_input")} · ${t("dynamic_input_placeholder")}" />
           </div>
-          <div class="ucs-indicator" id="canvasCoords" title="World Coordinate System" aria-label="World Coordinate System">
+          <div class="ucs-indicator" id="canvasCoords" title="${t("wcs_aria")}" aria-label="${t("wcs_aria")}">
             <svg viewBox="-32 -11 80 80" aria-hidden="true">
               <path class="ucs-axis-x" d="M8 29H34M29 24l5 5-5 5" />
               <path class="ucs-axis-y" d="M8 29V4M3 9l5-5 5 5" />
@@ -499,65 +512,65 @@ function renderShell() {
             </svg>
             <span id="canvasSpaceLabel">WCS</span>
           </div>
-          <div class="view-cube" id="viewCube" role="group" aria-label="ViewCube · 2D WCS">
-            <button class="cube-home cube-action" title="${currentLang === 'vi' ? 'Home · Hướng Bắc và thu phóng toàn bộ' : 'Home · North up and Zoom Extents'}" aria-label="${currentLang === 'vi' ? 'Hướng Bắc và thu phóng toàn bộ' : 'North up and Zoom Extents'}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-8 9 8M6 9v12h12V9M10 21v-7h4v7"/></svg></button>
+          <div class="view-cube" id="viewCube" role="group" aria-label="${t("viewcube_aria")}">
+            <button class="cube-home cube-action" title="${t("viewcube_home_title")}" aria-label="${t("viewcube_home_aria")}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-8 9 8M6 9v12h12V9M10 21v-7h4v7"/></svg></button>
             <span class="cube-compass-ring" aria-hidden="true"></span>
-            <button class="cube-direction cube-north" data-cube-heading="N" aria-pressed="true" title="North up">N</button>
-            <button class="cube-direction cube-east" data-cube-heading="E" title="East up">E</button>
-            <button class="cube-direction cube-south" data-cube-heading="S" title="South up">S</button>
-            <button class="cube-direction cube-west" data-cube-heading="W" title="West up">W</button>
-            <button class="cube-top-face" id="cubeTopButton" title="${currentLang === 'vi' ? 'Nhấp: hướng Bắc · Kéo ngang: xoay · ←/→: 15° · Shift: 45°' : 'Click: North up · Drag horizontally: rotate · ←/→: 15° · Shift: 45°'}" aria-label="${currentLang === 'vi' ? 'Góc nhìn TOP · Kéo hoặc dùng phím mũi tên để xoay' : 'TOP view · Drag or use arrow keys to rotate'}">TOP</button>
-            <button class="cube-action cube-turn-left" data-cube-turn="1" title="${currentLang === 'vi' ? 'Xoay trái 90°' : 'Rotate left 90°'}" aria-label="${currentLang === 'vi' ? 'Xoay trái 90°' : 'Rotate left 90°'}">↶</button>
-            <output class="cube-angle" aria-label="${currentLang === 'vi' ? 'Góc xoay vùng nhìn' : 'View rotation'}" aria-live="off">0°</output>
-            <button class="cube-action cube-turn-right" data-cube-turn="-1" title="${currentLang === 'vi' ? 'Xoay phải 90°' : 'Rotate right 90°'}" aria-label="${currentLang === 'vi' ? 'Xoay phải 90°' : 'Rotate right 90°'}">↷</button>
+            <button class="cube-direction cube-north" data-cube-heading="N" aria-pressed="true" title="${t("viewcube_north_title")}" aria-label="${t("viewcube_north_title")}">N</button>
+            <button class="cube-direction cube-east" data-cube-heading="E" title="${t("viewcube_east_title")}" aria-label="${t("viewcube_east_title")}">E</button>
+            <button class="cube-direction cube-south" data-cube-heading="S" title="${t("viewcube_south_title")}" aria-label="${t("viewcube_south_title")}">S</button>
+            <button class="cube-direction cube-west" data-cube-heading="W" title="${t("viewcube_west_title")}" aria-label="${t("viewcube_west_title")}">W</button>
+            <button class="cube-top-face" id="cubeTopButton" title="${t("viewcube_top_title")}" aria-label="${t("viewcube_top_aria")}">TOP</button>
+            <button class="cube-action cube-turn-left" data-cube-turn="1" title="${t("viewcube_turn_left")}" aria-label="${t("viewcube_turn_left")}">↶</button>
+            <output class="cube-angle" aria-label="${t("viewcube_angle_aria")}" aria-live="off">0°</output>
+            <button class="cube-action cube-turn-right" data-cube-turn="-1" title="${t("viewcube_turn_right")}" aria-label="${t("viewcube_turn_right")}">↷</button>
           </div>
-          <div class="nav-wheel" role="toolbar" aria-label="View navigation">
-            <button class="nav-control" id="navZoomExtents" title="Zoom Extents" aria-label="Zoom Extents"><span class="tool-icon"></span></button>
-            <button class="nav-control" id="navZoomIn" title="Zoom In" aria-label="Zoom In"><span class="tool-icon"></span></button>
-            <button class="nav-control" id="navZoomOut" title="Zoom Out" aria-label="Zoom Out"><span class="tool-icon"></span></button>
+          <div class="nav-wheel" role="toolbar" aria-label="${t("view_navigation_aria")}">
+            <button class="nav-control" id="navZoomExtents" title="${t("tool_zoom_all")}" aria-label="${t("tool_zoom_all")}"><span class="tool-icon"></span></button>
+            <button class="nav-control" id="navZoomIn" title="${t("title_zoom_in")}" aria-label="${t("title_zoom_in")}"><span class="tool-icon"></span></button>
+            <button class="nav-control" id="navZoomOut" title="${t("title_zoom_out")}" aria-label="${t("title_zoom_out")}"><span class="tool-icon"></span></button>
           </div>
         </div>
-        <div class="layout-tab-bar" id="layoutTabBar" role="tablist" aria-label="${currentLang === "vi" ? "Không gian bản vẽ" : "Drawing spaces"}">
+        <div class="layout-tab-bar" id="layoutTabBar" role="tablist" aria-label="${t("drawing_spaces_aria")}">
           ${getDrawingSpaces(activeDocId).map((space) => `<button class="layout-tab" role="tab" aria-selected="${space === activeSpace}" data-space="${space}">${space === "model" ? "Model" : `Layout${space.slice(6)}`}</button>`).join("")}
-          <button class="layout-add-btn" id="addLayoutBtn" title="Thêm bố cục mới">＋</button>
+          <button class="layout-add-btn" id="addLayoutBtn" title="${t("title_add_layout")}">＋</button>
         </div>
       </section>
-      <div class="palette-width-splitter" id="paletteWidthSplitter" role="separator" aria-label="Resize docked palettes" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="520" aria-valuenow="${sidepanelsWidth}" tabindex="0" ${!Object.values(paletteVisibility).some(Boolean) ? "hidden" : ""}></div>
+      <div class="palette-width-splitter" id="paletteWidthSplitter" role="separator" aria-label="${t("resize_docked_palettes")}" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="520" aria-valuenow="${sidepanelsWidth}" tabindex="0" ${!Object.values(paletteVisibility).some(Boolean) ? "hidden" : ""}></div>
       <aside class="sidepanels ${Object.values(paletteVisibility).some(Boolean) ? "" : "empty"}" style="--properties-panel-height: ${propertiesPanelHeight}px; --sidepanels-width: ${sidepanelsWidth}px">
         <section class="panel properties ${paletteVisibility.properties ? "" : "palette-hidden"} ${paletteCollapsed.properties ? "collapsed" : ""}">
           <div class="panel-heading">
             <span class="panel-grip">⠿</span>
             <span>${t("prop_heading")}</span>
-            <button class="panel-collapse" id="toggleProperties" title="Collapse Properties" aria-label="Collapse Properties" aria-expanded="${!paletteCollapsed.properties}">${paletteCollapsed.properties ? "›" : "⌄"}</button>
-            <button class="panel-close" id="hideProperties" title="Close Properties" aria-label="Close Properties">×</button>
+            <button class="panel-collapse" id="toggleProperties" title="${t("collapse_properties")}" aria-label="${t("collapse_properties")}" aria-expanded="${!paletteCollapsed.properties}">${paletteCollapsed.properties ? "›" : "⌄"}</button>
+            <button class="panel-close" id="hideProperties" title="${t("close_properties")}" aria-label="${t("close_properties")}">×</button>
           </div>
           <div class="panel-body" id="propertiesBody"></div>
         </section>
-        <div class="palette-splitter" id="paletteSplitter" role="separator" aria-label="Resize Properties palette" aria-orientation="horizontal" aria-valuemin="150" aria-valuemax="600" aria-valuenow="${propertiesPanelHeight}" tabindex="0" ${!paletteVisibility.properties || !paletteVisibility.layers || paletteCollapsed.properties || paletteCollapsed.layers ? "hidden" : ""}></div>
+        <div class="palette-splitter" id="paletteSplitter" role="separator" aria-label="${t("resize_properties_palette")}" aria-orientation="horizontal" aria-valuemin="150" aria-valuemax="600" aria-valuenow="${propertiesPanelHeight}" tabindex="0" ${!paletteVisibility.properties || !paletteVisibility.layers || paletteCollapsed.properties || paletteCollapsed.layers ? "hidden" : ""}></div>
         <section class="panel layers ${paletteVisibility.layers ? "" : "palette-hidden"} ${paletteCollapsed.layers ? "collapsed" : ""}">
           <div class="panel-heading">
             <span class="panel-grip">⠿</span>
             <span>${t("layer_heading")}</span>
-            <button class="panel-collapse" id="toggleLayers" title="Collapse Layers" aria-label="Collapse Layers" aria-expanded="${!paletteCollapsed.layers}">${paletteCollapsed.layers ? "›" : "⌄"}</button>
+            <button class="panel-collapse" id="toggleLayers" title="${t("collapse_layers")}" aria-label="${t("collapse_layers")}" aria-expanded="${!paletteCollapsed.layers}">${paletteCollapsed.layers ? "›" : "⌄"}</button>
             <button class="add-layer" id="addLayerBtn" title="${t('add_layer')}">＋</button>
-            <button class="panel-close" id="hideLayers" title="Close Layers" aria-label="Close Layers">×</button>
+            <button class="panel-close" id="hideLayers" title="${t("close_layers")}" aria-label="${t("close_layers")}">×</button>
           </div>
           <div id="newLayerContainer" class="new-layer-box" style="display:none;">
-            <input type="text" id="newLayerInput" class="new-layer-input" placeholder="Layer name..." />
-            <button id="confirmAddLayer" class="new-layer-btn">Add</button>
+            <input type="text" id="newLayerInput" class="new-layer-input" placeholder="${t("new_layer_name_placeholder")}" aria-label="${t("new_layer_name_placeholder")}" />
+            <button id="confirmAddLayer" class="new-layer-btn">${t("confirm_add_layer")}</button>
           </div>
           <div class="layer-head"><span>${t("layer_name")}</span><span>${t("layer_on")}</span><span>${t("layer_lock")}</span></div>
           <div id="layerList"></div>
         </section>
       </aside>
     </main>
-    <div class="commandbar-splitter" id="commandbarSplitter" role="separator" aria-label="Resize command line" aria-orientation="horizontal" aria-valuemin="56" aria-valuemax="260" aria-valuenow="${commandbarHeight}" tabindex="0" ${commandbarVisible ? "" : "hidden"}></div>
-    <section class="commandbar" style="--commandbar-height: ${commandbarHeight}px" ${commandbarVisible ? "" : "hidden"}>
-      <div class="command-history" id="commandHistory" aria-live="polite"></div>
+    <div class="commandbar-splitter" id="commandbarSplitter" role="separator" aria-label="${t("resize_command_line")}" aria-orientation="horizontal" aria-valuemin="56" aria-valuemax="260" aria-valuenow="${commandbarHeight}" tabindex="0" ${commandbarVisible ? "" : "hidden"}></div>
+    <section class="commandbar" aria-label="${t("command_line")}" style="--commandbar-height: ${commandbarHeight}px" ${commandbarVisible ? "" : "hidden"}>
+      <div class="command-history" id="commandHistory" role="log" aria-label="${t("command_history_aria")}" aria-live="polite"></div>
       <div class="command-entry">
-        <div class="prompt-mark">${t("command_line")}:</div>
-        <input id="commandInput" autocomplete="off" placeholder="${t('cmd_placeholder')}" />
-        <button class="command-send" id="commandSend" title="Execute command">↵</button>
+        <label class="prompt-mark" for="commandInput">${t("command_line")}:</label>
+        <input id="commandInput" autocomplete="off" placeholder="${t('cmd_placeholder')}" aria-label="${t("command_line")}" />
+        <button class="command-send" id="commandSend" title="${t("execute_command")}" aria-label="${t("execute_command")}">↵</button>
       </div>
     </section>
     <footer class="statusbar">
@@ -568,9 +581,9 @@ function renderShell() {
       <div class="status-right">
         <span id="coordReadout">X  0.000   Y  0.000</span>
         <span class="status-sep"></span>
-        <button id="toggleGridBtn" class="status-toggle active" title="Toggle Grid" aria-label="${t("grid_btn")}" aria-pressed="true"><span class="tool-icon" aria-hidden="true"></span><span>GRID</span></button>
-        <button id="toggleSnapBtn" class="status-toggle active" title="Toggle Object Snap (F3)" aria-label="${t("snap_btn")}" aria-pressed="true"><span class="tool-icon" aria-hidden="true"></span><span>OSNAP</span></button>
-        <button id="toggleOrthoBtn" class="status-toggle" title="Toggle Ortho Mode (F8)" aria-label="${t("ortho_btn")}" aria-pressed="false"><span class="tool-icon" aria-hidden="true"></span><span>ORTHO</span></button>
+        <button id="toggleGridBtn" class="status-toggle active" title="${t("toggle_grid_title")}" aria-label="${t("toggle_grid_title")}" aria-pressed="true"><span class="tool-icon" aria-hidden="true"></span><span>GRID</span></button>
+        <button id="toggleSnapBtn" class="status-toggle active" title="${t("toggle_snap_title")}" aria-label="${t("toggle_snap_title")}" aria-pressed="true"><span class="tool-icon" aria-hidden="true"></span><span>OSNAP</span></button>
+        <button id="toggleOrthoBtn" class="status-toggle" title="${t("toggle_ortho_title")}" aria-label="${t("toggle_ortho_title")}" aria-pressed="false"><span class="tool-icon" aria-hidden="true"></span><span>ORTHO</span></button>
         <button id="toggleDynamicInputBtn" class="status-toggle ${dynamicInputEnabled ? "active" : ""}" title="${t("dynamic_input")} (F12)" aria-label="${t("dynamic_input")} (F12)" aria-pressed="${dynamicInputEnabled}"><span aria-hidden="true">DYN</span></button>
         <span class="zoom-readout" id="zoomReadout">100%</span>
         <button class="user-icon" title="Engineer Thanh Phuong">P</button>
@@ -578,34 +591,34 @@ function renderShell() {
     </footer>
     <section class="start-screen ${showStartScreen ? "" : "hidden"}" id="startScreen">
       <aside class="start-sidebar">
-        <div class="start-sidebar-brand"><span class="start-brand-mark">C</span><div><strong>CONCOSTCAD</strong><small>${currentLang === "vi" ? "Không gian bản vẽ" : "Drafting workspace"}</small></div></div>
+        <div class="start-sidebar-brand"><span class="start-brand-mark">C</span><div><strong>CONCOSTCAD</strong><small>${t("start_workspace")}</small></div></div>
         <div class="start-sidebar-actions">
-          <button class="start-action" id="startOpenBtn"><span class="start-action-icon" aria-hidden="true">▱</span>${currentLang === "vi" ? "Mở tệp..." : "Open..."}</button>
-          <button class="start-action" id="startNewBtn"><span class="start-action-icon" aria-hidden="true">＋</span>${currentLang === "vi" ? "Bản vẽ mới" : "New Drawing"}</button>
+          <button class="start-action" id="startOpenBtn"><span class="start-action-icon" aria-hidden="true">▱</span>${t("start_open")}</button>
+          <button class="start-action" id="startNewBtn"><span class="start-action-icon" aria-hidden="true">＋</span>${t("start_new")}</button>
         </div>
         <div class="start-sidebar-divider"></div>
-        <nav class="start-nav" aria-label="${currentLang === "vi" ? "Điều hướng màn hình bắt đầu" : "Start screen navigation"}">
-          <button class="start-nav-item ${startPage === "recent" ? "active" : ""}" data-start-page="recent"><span aria-hidden="true">◷</span>${currentLang === "vi" ? "Gần đây" : "Recent"}</button>
-          <button class="start-nav-item ${startPage === "learn" ? "active" : ""}" data-start-page="learn"><span aria-hidden="true">ⓘ</span>${currentLang === "vi" ? "Bắt đầu" : "Getting Started"}</button>
+        <nav class="start-nav" aria-label="${t("start_nav_aria")}">
+          <button class="start-nav-item ${startPage === "recent" ? "active" : ""}" data-start-page="recent"><span aria-hidden="true">◷</span>${t("start_recent")}</button>
+          <button class="start-nav-item ${startPage === "learn" ? "active" : ""}" data-start-page="learn"><span aria-hidden="true">ⓘ</span>${t("start_getting_started")}</button>
         </nav>
         <div class="start-sidebar-footer">DWG · DXF <span>•</span> mm</div>
       </aside>
       <div class="start-main">
         <section class="start-page-content ${startPage === "recent" ? "active" : ""}" data-start-content="recent">
-          <div class="start-main-heading"><div><h1>${currentLang === "vi" ? "Gần đây" : "Recent"}</h1><p>${currentLang === "vi" ? "Tiếp tục làm việc với bản vẽ của bạn" : "Continue working on your drawings"}</p></div>
-            <div class="recent-view-toggle" role="group" aria-label="${currentLang === "vi" ? "Kiểu hiển thị bản vẽ" : "Drawing view mode"}">
-              <button class="${recentViewMode === "list" ? "active" : ""}" data-recent-mode="list" aria-label="${currentLang === "vi" ? "Danh sách" : "List view"}" aria-pressed="${recentViewMode === "list"}">☰</button>
-              <button class="${recentViewMode === "grid" ? "active" : ""}" data-recent-mode="grid" aria-label="${currentLang === "vi" ? "Lưới" : "Grid view"}" aria-pressed="${recentViewMode === "grid"}">▦</button>
+          <div class="start-main-heading"><div><h1>${t("recent_heading")}</h1><p>${t("recent_subtitle")}</p></div>
+            <div class="recent-view-toggle" role="group" aria-label="${t("recent_view_mode")}">
+              <button class="${recentViewMode === "list" ? "active" : ""}" data-recent-mode="list" aria-label="${t("list_view")}" aria-pressed="${recentViewMode === "list"}">☰</button>
+              <button class="${recentViewMode === "grid" ? "active" : ""}" data-recent-mode="grid" aria-label="${t("grid_view")}" aria-pressed="${recentViewMode === "grid"}">▦</button>
             </div>
           </div>
           <div class="recent-grid ${recentViewMode === "list" ? "list-view" : ""} ${recent.length ? "" : "empty-grid"}">${recentMarkup}</div>
         </section>
         <section class="start-page-content start-learn ${startPage === "learn" ? "active" : ""}" data-start-content="learn">
-          <div class="start-main-heading"><div><h1>${currentLang === "vi" ? "Bắt đầu với CONCOSTCAD" : "Getting Started"}</h1><p>${currentLang === "vi" ? "Các bước cơ bản để bắt đầu một bản vẽ kỹ thuật 2D." : "A few basics to get your 2D drawing started."}</p></div></div>
+          <div class="start-main-heading"><div><h1>${t("getting_started_heading")}</h1><p>${t("getting_started_subtitle")}</p></div></div>
           <div class="learn-cards">
-            <article class="learn-card"><span class="learn-step">01</span><div><h2>${currentLang === "vi" ? "Tạo hoặc mở bản vẽ" : "Create or open a drawing"}</h2><p>${currentLang === "vi" ? "Tạo bản vẽ trống hoặc mở tệp DWG/DXF từ máy tính." : "Start blank or open a DWG/DXF file from your computer."}</p></div><button id="learnNewBtn">${currentLang === "vi" ? "Bản vẽ mới" : "New Drawing"}</button><button id="learnOpenBtn">${currentLang === "vi" ? "Mở tệp" : "Open File"}</button></article>
-            <article class="learn-card"><span class="learn-step">02</span><div><h2>${currentLang === "vi" ? "Vẽ hình học" : "Draw geometry"}</h2><p>${currentLang === "vi" ? "Chọn LINE, ARC hoặc PLINE trên thanh công cụ, rồi chỉ điểm trên vùng vẽ." : "Choose LINE, ARC, or PLINE from the ribbon, then specify points on the canvas."}</p></div><span class="learn-command">LINE · ARC · PLINE</span></article>
-            <article class="learn-card"><span class="learn-step">03</span><div><h2>${currentLang === "vi" ? "Lưu tệp" : "Save your work"}</h2><p>${currentLang === "vi" ? "Lưu bản vẽ dưới định dạng DWG hoặc DXF." : "Save your drawing as a DWG or DXF file."}</p></div><span class="learn-command">DWG · DXF</span></article>
+            <article class="learn-card"><span class="learn-step">01</span><div><h2>${t("start_card_create_title")}</h2><p>${t("start_card_create_description")}</p></div><button id="learnNewBtn">${t("start_new")}</button><button id="learnOpenBtn">${t("start_open_file")}</button></article>
+            <article class="learn-card"><span class="learn-step">02</span><div><h2>${t("start_card_draw_title")}</h2><p>${t("start_card_draw_description")}</p></div><span class="learn-command">LINE · ARC · PLINE</span></article>
+            <article class="learn-card"><span class="learn-step">03</span><div><h2>${t("start_card_save_title")}</h2><p>${t("start_card_save_description")}</p></div><span class="learn-command">DWG · DXF</span></article>
           </div>
         </section>
       </div>
@@ -634,14 +647,14 @@ function applyRibbonDisplayMode() {
   if (button) {
     button.textContent = ribbonModeIcon();
     button.setAttribute("aria-expanded", String(ribbonDisplayMode === "expanded"));
-    button.setAttribute("aria-label", currentLang === "vi" ? `Chế độ ribbon: ${ribbonModeLabel()}` : `Ribbon display: ${ribbonModeLabel()}`);
-    button.title = currentLang === "vi" ? `Chế độ ribbon: ${ribbonModeLabel()} · nhấn để đổi` : `Ribbon display: ${ribbonModeLabel()} · click to cycle`;
+    button.setAttribute("aria-label", tf("ribbon_display_aria", { mode: ribbonModeLabel() }));
+    button.title = tf("ribbon_display_title", { mode: ribbonModeLabel() });
   }
   $$("#ribbonContainer .group-caption").forEach((caption) => {
     if (ribbonDisplayMode === "panels") {
       caption.setAttribute("role", "button");
       caption.tabIndex = 0;
-      caption.title = currentLang === "vi" ? "Nhấn để mở ribbon đầy đủ" : "Click to expand the ribbon";
+      caption.title = t("ribbon_expand_title");
       caption.onclick = () => setRibbonDisplayMode("expanded");
       caption.onkeydown = (event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -667,6 +680,7 @@ function bindShellEvents() {
   const dynamicInputEntry = $("#dynamicInputEntry");
 
   dynamicInputPanel?.addEventListener("pointerdown", (event) => event.stopPropagation());
+  dynamicInputEntry?.addEventListener("input", () => syncCommandInputDraft(dynamicInputEntry));
   dynamicInputEntry?.addEventListener("keydown", (event) => {
     if (event.isComposing || event.keyCode === 229) return;
     if (!["Enter", "Escape", "ArrowUp", "ArrowDown"].includes(event.key)) return;
@@ -836,11 +850,11 @@ function bindShellEvents() {
   menuAction("menuToggleProperties", () => setPaletteVisibility("properties", !paletteVisibility.properties));
   menuAction("menuToggleLayers", () => setPaletteVisibility("layers", !paletteVisibility.layers));
   menuAction("menuKeyboardHelp", () => {
-    setStatus("L: LINE · PL: PLINE · C: CIRCLE · E: ERASE · Ctrl+S: SAVE · Ctrl+9: COMMAND LINE · F3: OSNAP · F8: ORTHO · F12: DYNAMIC INPUT");
+    setStatus(t("keyboard_shortcuts_status"));
     $("#commandInput")?.focus();
   });
-  menuAction("menuHelp", () => setStatus(currentLang === "vi" ? "Trợ giúp: nhập lệnh ở dòng lệnh phía dưới hoặc chọn công cụ trên ribbon." : "Help: enter commands on the command line or choose a tool from the ribbon."));
-  menuAction("menuAbout", () => setStatus("CONCOSTCAD · Rust Edition 2.0 · 2D Drafting"));
+  menuAction("menuHelp", () => setStatus(t("menu_help_status")));
+  menuAction("menuAbout", () => setStatus(t("menu_about_status")));
   $$("[data-menu-recent]").forEach((button) => {
     button.onclick = () => { closeMenus(); openDrawing(button.dataset.menuRecent); };
   });
@@ -1457,6 +1471,8 @@ function toggleDynamicInput() {
   if (!dynamicInputEnabled && panel?.contains(document.activeElement)) {
     if (commandbarVisible) $("#commandInput")?.focus({ preventScroll: true });
     else $("#viewport")?.focus({ preventScroll: true });
+  } else if (dynamicInputEnabled && !showStartScreen && activeTool !== "select") {
+    $("#viewport")?.focus({ preventScroll: true });
   }
   updateDynamicInput();
 }
@@ -1472,7 +1488,7 @@ function renderCommandLog() {
   const history = $("#commandHistory");
   if (history) {
     history.innerHTML = commandLog.map((entry) => entry.command
-      ? `<button type="button" class="command-line ${entry.kind}" data-command="${escapeHtml(entry.command)}" title="Recall: ${escapeHtml(entry.command)}" aria-label="Recall command ${escapeHtml(entry.command)}">${escapeHtml(entry.text)}</button>`
+      ? `<button type="button" class="command-line ${entry.kind}" data-command="${escapeHtml(entry.command)}" title="${escapeHtml(tf("command_recall_title", { command: entry.command }))}" aria-label="${escapeHtml(tf("command_recall_aria", { command: entry.command }))}">${escapeHtml(entry.text)}</button>`
       : `<div class="command-line ${entry.kind}">${escapeHtml(entry.text)}</div>`).join("");
     history.scrollTop = history.scrollHeight;
   }
@@ -2527,50 +2543,50 @@ function renderRibbon() {
     container.innerHTML = `
       <div class="ribbon-group ribbon-home-draw-panel">
         <div class="tools ribbon-home-draw-tools">
-          <button class="tool-button ribbon-home-large ${activeTool==='line'?'selected':''}" data-tool="line" title="${t("tool_line")} (LINE)"><span class="tool-icon"></span><span class="ribbon-command-label">Line</span></button>
-          <button class="tool-button ribbon-home-large ${activeTool==='polyline'?'selected':''}" data-tool="polyline" title="${t("tool_poly")} (PLINE)"><span class="tool-icon"></span><span class="ribbon-command-label">Polyline</span></button>
-          <button class="tool-button ribbon-home-large ${activeTool==='circle'?'selected':''}" data-tool="circle" title="${t("tool_circle")} (CIRCLE)"><span class="tool-icon"></span><span class="ribbon-command-label">Circle</span></button>
-          <button class="tool-button ribbon-home-large ${activeTool==='arc'?'selected':''}" data-tool="arc" title="${t("tool_arc")} (ARC)"><span class="tool-icon"></span><span class="ribbon-command-label">Arc</span></button>
+          <button class="tool-button ribbon-home-large ${activeTool==='line'?'selected':''}" data-tool="line" title="${t("tool_line")} (LINE)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_line")}</span></button>
+          <button class="tool-button ribbon-home-large ${activeTool==='polyline'?'selected':''}" data-tool="polyline" title="${t("tool_poly")} (PLINE)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_poly")}</span></button>
+          <button class="tool-button ribbon-home-large ${activeTool==='circle'?'selected':''}" data-tool="circle" title="${t("tool_circle")} (CIRCLE)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_circle")}</span></button>
+          <button class="tool-button ribbon-home-large ${activeTool==='arc'?'selected':''}" data-tool="arc" title="${t("tool_arc")} (ARC)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_arc")}</span></button>
           <div class="ribbon-home-draw-stack">
-            <button class="tool-button ribbon-home-small ${activeTool==='rectangle'?'selected':''}" data-tool="rectangle" title="${t("tool_rect")} (RECTANG)"><span class="tool-icon"></span><span class="ribbon-command-label">Rectangle</span></button>
-            <button class="tool-button ribbon-home-small ${activeTool==='hatch'?'selected':''}" data-tool="hatch" title="${t("tool_hatch")} (HATCH)"><span class="tool-icon"></span><span class="ribbon-command-label">Hatch</span></button>
-            <button class="tool-button ribbon-home-small ${activeTool==='spline'?'selected':''}" data-tool="spline" title="${t("tool_spline")} (SPLINE)"><span class="tool-icon"></span><span class="ribbon-command-label">Spline</span></button>
-            <button class="tool-button ribbon-home-small ${activeTool==='revcloud'?'selected':''}" data-tool="revcloud" title="${t("tool_revcloud")} (REVCLOUD)"><span class="tool-icon"></span><span class="ribbon-command-label">Revcloud</span></button>
+            <button class="tool-button ribbon-home-small ${activeTool==='rectangle'?'selected':''}" data-tool="rectangle" title="${t("tool_rect")} (RECTANG)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_rect")}</span></button>
+            <button class="tool-button ribbon-home-small ${activeTool==='hatch'?'selected':''}" data-tool="hatch" title="${t("tool_hatch")} (HATCH)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_hatch")}</span></button>
+            <button class="tool-button ribbon-home-small ${activeTool==='spline'?'selected':''}" data-tool="spline" title="${t("tool_spline")} (SPLINE)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_spline")}</span></button>
+            <button class="tool-button ribbon-home-small ${activeTool==='revcloud'?'selected':''}" data-tool="revcloud" title="${t("tool_revcloud")} (REVCLOUD)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_revcloud")}</span></button>
           </div>
         </div>
         <div class="group-caption">${t("grp_draw")}</div>
       </div>
       <div class="ribbon-group ribbon-home-modify-panel">
         <div class="tools ribbon-home-modify-tools">
-          <button class="tool-button ribbon-home-modify ${activeTool==='move'?'selected':''}" data-tool="move" title="${t("tool_move")} (MOVE)"><span class="tool-icon"></span><span class="ribbon-command-label">Move</span></button>
-          <button class="tool-button ribbon-home-modify ${activeTool==='copy'?'selected':''}" data-tool="copy" title="${t("tool_copy")} (COPY)"><span class="tool-icon"></span><span class="ribbon-command-label">Copy</span></button>
-          <button class="tool-button ribbon-home-modify ${activeTool==='rotate'?'selected':''}" data-tool="rotate" title="${t("tool_rotate")} (ROTATE)"><span class="tool-icon"></span><span class="ribbon-command-label">Rotate</span></button>
-          <button class="tool-button ribbon-home-modify ${activeTool==='mirror'?'selected':''}" data-tool="mirror" title="${t("tool_mirror")} (MIRROR)"><span class="tool-icon"></span><span class="ribbon-command-label">Mirror</span></button>
-          <button class="tool-button ribbon-home-modify ${activeTool==='trim'?'selected':''}" data-tool="trim" title="${t("tool_trim")} (TRIM)"><span class="tool-icon"></span><span class="ribbon-command-label">Trim</span></button>
-          <button class="tool-button ribbon-home-modify ${activeTool==='extend'?'selected':''}" data-tool="extend" title="${t("tool_extend")} (EXTEND)"><span class="tool-icon"></span><span class="ribbon-command-label">Extend</span></button>
-          <button class="tool-button ribbon-home-modify" id="offsetBtn" title="${t("tool_offset")} (OFFSET)"><span class="tool-icon"></span><span class="ribbon-command-label">Offset</span></button>
-          <button class="tool-button ribbon-home-modify" id="eraseBtn" title="${t("tool_erase")} (ERASE)"><span class="tool-icon"></span><span class="ribbon-command-label">Erase</span></button>
-          <button class="tool-button ribbon-home-modify ${activeTool==='fillet'?'selected':''}" data-tool="fillet" title="${t("tool_fillet")} (FILLET)"><span class="tool-icon"></span><span class="ribbon-command-label">Fillet</span></button>
-          <button class="tool-button ribbon-home-modify ${activeTool==='chamfer'?'selected':''}" data-tool="chamfer" title="${t("tool_chamfer")} (CHAMFER)"><span class="tool-icon"></span><span class="ribbon-command-label">Chamfer</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='move'?'selected':''}" data-tool="move" title="${t("tool_move")} (MOVE)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_move")}</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='copy'?'selected':''}" data-tool="copy" title="${t("tool_copy")} (COPY)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_copy")}</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='rotate'?'selected':''}" data-tool="rotate" title="${t("tool_rotate")} (ROTATE)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_rotate")}</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='mirror'?'selected':''}" data-tool="mirror" title="${t("tool_mirror")} (MIRROR)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_mirror")}</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='trim'?'selected':''}" data-tool="trim" title="${t("tool_trim")} (TRIM)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_trim")}</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='extend'?'selected':''}" data-tool="extend" title="${t("tool_extend")} (EXTEND)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_extend")}</span></button>
+          <button class="tool-button ribbon-home-modify" id="offsetBtn" title="${t("tool_offset")} (OFFSET)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_offset")}</span></button>
+          <button class="tool-button ribbon-home-modify" id="eraseBtn" title="${t("tool_erase")} (ERASE)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_erase")}</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='fillet'?'selected':''}" data-tool="fillet" title="${t("tool_fillet")} (FILLET)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_fillet")}</span></button>
+          <button class="tool-button ribbon-home-modify ${activeTool==='chamfer'?'selected':''}" data-tool="chamfer" title="${t("tool_chamfer")} (CHAMFER)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_chamfer")}</span></button>
         </div>
         <div class="group-caption">${t("grp_modify")}</div>
       </div>
       <div class="ribbon-group ribbon-home-annotation-panel">
         <div class="tools ribbon-home-annotation-tools">
-          <button class="tool-button ribbon-home-large ${activeTool==='text'?'selected':''}" data-tool="text" title="${t("tool_text")} (TEXT)"><span class="tool-icon"></span><span class="ribbon-command-label">Text</span></button>
-          <button class="tool-button ribbon-home-large ${activeTool==='dim'?'selected':''}" data-tool="dim" title="${t("tool_dim")} (DIM)"><span class="tool-icon"></span><span class="ribbon-command-label">Dimension</span></button>
+          <button class="tool-button ribbon-home-large ${activeTool==='text'?'selected':''}" data-tool="text" title="${t("tool_text")} (TEXT)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_text")}</span></button>
+          <button class="tool-button ribbon-home-large ${activeTool==='dim'?'selected':''}" data-tool="dim" title="${t("tool_dim")} (DIM)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_dim")}</span></button>
         </div>
         <div class="group-caption">${t("grp_annotate")}</div>
       </div>
       <div class="ribbon-group ribbon-home-layers-panel">
         <div class="tools ribbon-home-layers-tools">
-          <label class="ribbon-field-label" for="ribbonLayerSelect">${currentLang === "vi" ? "Lớp hiện hành" : "Current Layer"}</label>
-          <select id="ribbonLayerSelect" class="ribbon-select" title="Active drawing layer">
+          <label class="ribbon-field-label" for="ribbonLayerSelect">${t("label_current_layer")}</label>
+          <select id="ribbonLayerSelect" class="ribbon-select" title="${t("title_active_layer")}">
             ${model.layers.map(l => `<option value="${escapeHtml(l.handle)}" ${l.name===model.currentLayer?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}
           </select>
           <div class="ribbon-home-layer-actions">
             <button class="tool-button ribbon-home-layer-add ribbon-home-layer-add-icon" id="ribbonAddLayer" aria-label="${t("add_layer")}" title="${t("add_layer")}"><span class="tool-icon"></span></button>
-            <button class="tool-button ribbon-home-layer-add" id="showLayersPanel" aria-pressed="${paletteVisibility.layers}" title="Toggle Layers palette"><span class="tool-icon"></span><span class="ribbon-command-label">Layers</span></button>
+            <button class="tool-button ribbon-home-layer-add" id="showLayersPanel" aria-pressed="${paletteVisibility.layers}" title="${t("title_toggle_layers")}"><span class="tool-icon"></span><span class="ribbon-command-label">${t("label_layers")}</span></button>
           </div>
         </div>
         <div class="group-caption">${t("grp_layers")}</div>
@@ -2578,30 +2594,30 @@ function renderRibbon() {
       <div class="ribbon-group ribbon-home-properties-panel">
         <div class="tools ribbon-home-properties-tools">
           <label class="ribbon-home-color-control" for="ribbonLayerColor">
-            <span>${currentLang === "vi" ? "Màu lớp hiện hành" : "Current Layer Color"}</span>
-            <input type="color" id="ribbonLayerColor" value="${model.layers.find((layer) => layer.name === model.currentLayer)?.color || "#79c9dc"}" aria-label="${currentLang === "vi" ? "Màu lớp hiện hành" : "Current Layer Color"}" ${showStartScreen ? "disabled" : ""}>
-            <strong>${currentLang === "vi" ? "Theo lớp" : "ByLayer"}</strong>
+            <span>${t("label_current_layer_color")}</span>
+            <input type="color" id="ribbonLayerColor" value="${model.layers.find((layer) => layer.name === model.currentLayer)?.color || "#79c9dc"}" aria-label="${t("label_current_layer_color")}" ${showStartScreen ? "disabled" : ""}>
+            <strong>${t("label_bylayer")}</strong>
           </label>
-          <button class="tool-button ribbon-home-properties-toggle ${paletteVisibility.properties ? 'selected' : ''}" id="showPropertiesPanel" aria-pressed="${paletteVisibility.properties}" title="Toggle Properties palette"><span class="tool-icon"></span><span class="ribbon-command-label">Properties</span></button>
+          <button class="tool-button ribbon-home-properties-toggle ${paletteVisibility.properties ? 'selected' : ''}" id="showPropertiesPanel" aria-pressed="${paletteVisibility.properties}" title="${t("title_toggle_properties")}"><span class="tool-icon"></span><span class="ribbon-command-label">${t("label_properties")}</span></button>
         </div>
-        <div class="group-caption">PROPERTIES</div>
+        <div class="group-caption">${t("grp_properties")}</div>
       </div>
       <div class="ribbon-group ribbon-home-utilities-panel">
         <div class="tools ribbon-home-utilities-tools">
-          <button class="tool-button ribbon-home-small ${activeTool==='dist'?'selected':''}" data-tool="dist" title="${t("tool_dist")} (DIST)"><span class="tool-icon"></span><span class="ribbon-command-label">Distance</span></button>
-          <button class="tool-button ribbon-home-small ${activeTool==='area'?'selected':''}" data-tool="area" title="${t("tool_area")} (AREA)"><span class="tool-icon"></span><span class="ribbon-command-label">Area</span></button>
-          <button class="tool-button ribbon-home-small" id="takeoffRibbonBtn" title="${currentLang === "vi" ? "Thống kê khối lượng" : "Quantity takeoff"} (TAKEOFF)"><span class="tool-icon"></span><span class="ribbon-command-label">${currentLang === "vi" ? "Thống kê" : "Takeoff"}</span></button>
+          <button class="tool-button ribbon-home-small ${activeTool==='dist'?'selected':''}" data-tool="dist" title="${t("tool_dist")} (DIST)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_dist")}</span></button>
+          <button class="tool-button ribbon-home-small ${activeTool==='area'?'selected':''}" data-tool="area" title="${t("tool_area")} (AREA)"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_area")}</span></button>
+          <button class="tool-button ribbon-home-small" id="takeoffRibbonBtn" title="${t("title_takeoff")}"><span class="tool-icon"></span><span class="ribbon-command-label">${t("label_takeoff")}</span></button>
         </div>
-        <div class="group-caption">UTILITIES</div>
+        <div class="group-caption">${t("grp_utilities")}</div>
       </div>
       <div class="ribbon-group ribbon-home-view-panel">
         <div class="tools ribbon-home-view-tools">
-          <button class="tool-button ribbon-home-small" id="zoomExtents" title="${t("tool_zoom_all")}"><span class="tool-icon"></span><span class="ribbon-command-label">Extents</span></button>
-          <button class="tool-button ribbon-home-small" id="zoomInBtn" title="Zoom In"><span class="tool-icon"></span><span class="ribbon-command-label">Zoom In</span></button>
-          <button class="tool-button ribbon-home-small" id="zoomOutBtn" title="Zoom Out"><span class="tool-icon"></span><span class="ribbon-command-label">Zoom Out</span></button>
-          <button class="tool-button ribbon-home-small" id="zoomResetBtn" title="Zoom to 100%"><span class="tool-icon"></span><span class="ribbon-command-label">100%</span></button>
+          <button class="tool-button ribbon-home-small" id="zoomExtents" title="${t("tool_zoom_all")}"><span class="tool-icon"></span><span class="ribbon-command-label">${t("tool_zoom_all")}</span></button>
+          <button class="tool-button ribbon-home-small" id="zoomInBtn" title="${t("title_zoom_in")}"><span class="tool-icon"></span><span class="ribbon-command-label">${t("label_zoom_in")}</span></button>
+          <button class="tool-button ribbon-home-small" id="zoomOutBtn" title="${t("title_zoom_out")}"><span class="tool-icon"></span><span class="ribbon-command-label">${t("label_zoom_out")}</span></button>
+          <button class="tool-button ribbon-home-small" id="zoomResetBtn" title="${t("title_zoom_reset")}"><span class="tool-icon"></span><span class="ribbon-command-label">${t("label_zoom_100")}</span></button>
         </div>
-        <div class="group-caption">VIEW</div>
+        <div class="group-caption">${t("grp_view")}</div>
       </div>
     `;
   } else if (activeRibbonTab === "draw") {
@@ -2618,31 +2634,31 @@ function renderRibbon() {
       </div>
       <div class="ribbon-group">
         <div class="tools">
-          <button class="tool-button compact" id="finishPolylineBtn"><span class="tool-icon">✔</span><span>Finish PL</span></button>
-          <button class="tool-button compact" id="closePolylineBtn"><span class="tool-icon">⟲</span><span>Close PL</span></button>
+          <button class="tool-button compact" id="finishPolylineBtn"><span class="tool-icon">✔</span><span>${t("label_finish_polyline")}</span></button>
+          <button class="tool-button compact" id="closePolylineBtn"><span class="tool-icon">⟲</span><span>${t("label_close_polyline")}</span></button>
         </div>
-        <div class="group-caption">POLYLINE MODES</div>
+        <div class="group-caption">${t("grp_polyline_modes")}</div>
       </div>
       <div class="ribbon-group">
         <div class="tools">
-          <button class="tool-button compact ${activeTool==='spline'?'selected':''}" data-tool="spline" title="Vẽ đường cong Spline (SPL)"><span class="tool-icon">〰</span><span>${t("tool_spline")}</span></button>
-          <button class="tool-button compact ${activeTool==='revcloud'?'selected':''}" data-tool="revcloud" title="Đám mây ghi chú (REVCLOUD)"><span class="tool-icon">☁</span><span>${t("tool_revcloud")}</span></button>
-          <button class="tool-button compact ${activeTool==='hatch'?'selected':''}" data-tool="hatch" title="Tô mẫu mặt cắt (HATCH)"><span class="tool-icon">▨</span><span>${t("tool_hatch")}</span></button>
+          <button class="tool-button compact ${activeTool==='spline'?'selected':''}" data-tool="spline" title="${t("tool_spline")} (SPL)"><span class="tool-icon">〰</span><span>${t("tool_spline")}</span></button>
+          <button class="tool-button compact ${activeTool==='revcloud'?'selected':''}" data-tool="revcloud" title="${t("tool_revcloud")} (REVCLOUD)"><span class="tool-icon">☁</span><span>${t("tool_revcloud")}</span></button>
+          <button class="tool-button compact ${activeTool==='hatch'?'selected':''}" data-tool="hatch" title="${t("tool_hatch")} (HATCH)"><span class="tool-icon">▨</span><span>${t("tool_hatch")}</span></button>
         </div>
-        <div class="group-caption">${currentLang === "vi" ? "HÌNH HỌC KHÁC" : "MORE GEOMETRY"}</div>
+        <div class="group-caption">${t("grp_more_geometry")}</div>
       </div>
       <div class="ribbon-group">
         <div class="tools">
           <button class="tool-button compact ${activeTool==='fillet'?'selected':''}" data-tool="fillet"><span class="tool-icon">◜</span><span>${t("tool_fillet")}</span></button>
           <button class="tool-button compact ${activeTool==='chamfer'?'selected':''}" data-tool="chamfer"><span class="tool-icon">◺</span><span>${t("tool_chamfer")}</span></button>
           <button class="tool-button compact ${activeTool==='join'?'selected':''}" data-tool="join"><span class="tool-icon">☍</span><span>${t("tool_join")}</span></button>
-          <button class="tool-button compact" id="takeoffRibbonBtn" title="Thống kê khối lượng (TAKEOFF)"><span class="tool-icon">📊</span><span>${currentLang === "vi" ? "BOM" : "Takeoff"}</span></button>
+          <button class="tool-button compact" id="takeoffRibbonBtn" title="${t("title_takeoff")}"><span class="tool-icon">📊</span><span>${t("label_takeoff")}</span></button>
           <button class="tool-button compact" id="explodeBtn"><span class="tool-icon">💥</span><span>${t("tool_explode")}</span></button>
         </div>
-        <div class="group-caption">${currentLang === "vi" ? "CHỈNH SỬA KHÁC" : "MORE MODIFY"}</div>
+        <div class="group-caption">${t("grp_more_modify")}</div>
       </div>
       <div class="ribbon-spacer"></div>
-      <div class="ribbon-hint">Click canvas or type coordinates</div>
+      <div class="ribbon-hint">${t("label_canvas_command_hint")}</div>
     `;
   } else if (activeRibbonTab === "annotate") {
     container.innerHTML = `
@@ -2656,9 +2672,9 @@ function renderRibbon() {
       </div>
       <div class="ribbon-group">
         <div class="tools" style="padding: 0 10px; color: #8e99a6; font-size: 11px; align-items: center; min-width: 200px;">
-          ${measureInfo ? `<span><strong>${measureInfo}</strong></span>` : `<span>Pick points to measure distance or calculate polygon area</span>`}
+          ${measureInfo ? `<span><strong>${measureInfo}</strong></span>` : `<span>${t("label_measure_prompt")}</span>`}
         </div>
-        <div class="group-caption">MEASUREMENT RESULTS</div>
+        <div class="group-caption">${t("grp_measure_results")}</div>
       </div>
       <div class="ribbon-spacer"></div>
     `;
@@ -2667,9 +2683,9 @@ function renderRibbon() {
       <div class="ribbon-group">
         <div class="tools">
           <button class="tool-button compact" id="zoomExtents"><span class="tool-icon">⛶</span><span>${t("tool_zoom_all")}</span></button>
-          <button class="tool-button compact" id="zoomInBtn"><span class="tool-icon">＋</span><span>Zoom In</span></button>
-          <button class="tool-button compact" id="zoomOutBtn"><span class="tool-icon">−</span><span>Zoom Out</span></button>
-          <button class="tool-button compact" id="zoomResetBtn"><span class="tool-icon">1:1</span><span>100%</span></button>
+          <button class="tool-button compact" id="zoomInBtn" title="${t("title_zoom_in")}"><span class="tool-icon">＋</span><span>${t("label_zoom_in")}</span></button>
+          <button class="tool-button compact" id="zoomOutBtn" title="${t("title_zoom_out")}"><span class="tool-icon">−</span><span>${t("label_zoom_out")}</span></button>
+          <button class="tool-button compact" id="zoomResetBtn" title="${t("title_zoom_reset")}"><span class="tool-icon">1:1</span><span>${t("label_zoom_100")}</span></button>
         </div>
         <div class="group-caption">${t("grp_nav")}</div>
       </div>
@@ -2686,14 +2702,14 @@ function renderRibbon() {
           <button class="tool-button compact ${dynamicInputEnabled ? 'selected' : ''}" id="ribbonToggleDynamicInput" aria-pressed="${dynamicInputEnabled}" title="${t("dynamic_input")} (F12)"><span class="tool-icon">DYN</span><span>${t("dynamic_input")}</span></button>
           <button class="tool-button compact ${commandbarVisible ? 'selected' : ''}" id="ribbonToggleCommandLine" aria-pressed="${commandbarVisible}" title="${t("command_line")} (Ctrl+9)"><span class="tool-icon">⌨</span><span>${t("command_line")}</span></button>
         </div>
-        <div class="group-caption">${currentLang === "vi" ? "NHẬP LỆNH" : "COMMAND INPUT"}</div>
+        <div class="group-caption">${t("grp_command_input")}</div>
       </div>
       <div class="ribbon-group">
         <div class="tools">
-          <button class="tool-button compact ${paletteVisibility.properties ? 'selected' : ''}" id="showPropertiesPanel" aria-pressed="${paletteVisibility.properties}" title="Toggle Properties palette"><span class="tool-icon">▤</span><span>Properties</span></button>
-          <button class="tool-button compact ${paletteVisibility.layers ? 'selected' : ''}" id="showLayersPanel" aria-pressed="${paletteVisibility.layers}" title="Toggle Layers palette"><span class="tool-icon">▧</span><span>Layers</span></button>
+          <button class="tool-button compact ${paletteVisibility.properties ? 'selected' : ''}" id="showPropertiesPanel" aria-pressed="${paletteVisibility.properties}" title="${t("title_toggle_properties")}"><span class="tool-icon">▤</span><span>${t("label_properties")}</span></button>
+          <button class="tool-button compact ${paletteVisibility.layers ? 'selected' : ''}" id="showLayersPanel" aria-pressed="${paletteVisibility.layers}" title="${t("title_toggle_layers")}"><span class="tool-icon">▧</span><span>${t("label_layers")}</span></button>
         </div>
-        <div class="group-caption">PALETTES</div>
+        <div class="group-caption">${t("grp_palettes")}</div>
       </div>
       <div class="ribbon-spacer"></div>
     `;
@@ -2701,8 +2717,8 @@ function renderRibbon() {
     container.innerHTML = `
       <div class="ribbon-group">
         <div class="tools ribbon-manage-layer-tools">
-          <label class="ribbon-field-label" for="ribbonLayerSelect">${currentLang === "vi" ? "Lớp hiện hành" : "Current Layer"}</label>
-          <select id="ribbonLayerSelect" class="ribbon-select" title="Active drawing layer">
+          <label class="ribbon-field-label" for="ribbonLayerSelect">${t("label_current_layer")}</label>
+          <select id="ribbonLayerSelect" class="ribbon-select" title="${t("title_active_layer")}">
             ${model.layers.map(l => `<option value="${escapeHtml(l.handle)}" ${l.name===model.currentLayer?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}
           </select>
           <button class="title-action" id="ribbonAddLayer"><span class="tool-icon"></span><span>${t("add_layer")}</span></button>
@@ -2711,10 +2727,10 @@ function renderRibbon() {
       </div>
       <div class="ribbon-group">
         <div class="tools">
-          <button class="tool-button compact ${paletteVisibility.layers ? 'selected' : ''}" id="showLayersPanel" aria-pressed="${paletteVisibility.layers}" title="Toggle Layers palette"><span class="tool-icon">▧</span><span class="ribbon-command-label">Layers</span></button>
-          <button class="tool-button compact ${paletteVisibility.properties ? 'selected' : ''}" id="showPropertiesPanel" aria-pressed="${paletteVisibility.properties}" title="Toggle Properties palette"><span class="tool-icon">▤</span><span class="ribbon-command-label">Properties</span></button>
+          <button class="tool-button compact ${paletteVisibility.layers ? 'selected' : ''}" id="showLayersPanel" aria-pressed="${paletteVisibility.layers}" title="${t("title_toggle_layers")}"><span class="tool-icon">▧</span><span class="ribbon-command-label">${t("label_layers")}</span></button>
+          <button class="tool-button compact ${paletteVisibility.properties ? 'selected' : ''}" id="showPropertiesPanel" aria-pressed="${paletteVisibility.properties}" title="${t("title_toggle_properties")}"><span class="tool-icon">▤</span><span class="ribbon-command-label">${t("label_properties")}</span></button>
         </div>
-        <div class="group-caption">PALETTES</div>
+        <div class="group-caption">${t("grp_palettes")}</div>
       </div>
       <div class="ribbon-spacer"></div>
     `;
@@ -2722,16 +2738,16 @@ function renderRibbon() {
     container.innerHTML = `
       <div class="ribbon-group">
         <div class="tools">
-          <button class="tool-button" id="outputSaveBtn" title="Save drawing (Ctrl+S)"><span class="tool-icon">▣</span><span class="ribbon-command-label">Save</span></button>
-          <button class="tool-button" id="outputExportPng" title="Export drawing as PNG"><span class="tool-icon">▧</span><span class="ribbon-command-label">PNG</span></button>
+          <button class="tool-button" id="outputSaveBtn" title="${t("title_save_drawing")}"><span class="tool-icon">▣</span><span class="ribbon-command-label">${t("tool_save")}</span></button>
+          <button class="tool-button" id="outputExportPng" title="${t("title_export_png")}"><span class="tool-icon">▧</span><span class="ribbon-command-label">PNG</span></button>
         </div>
-        <div class="group-caption">${currentLang === "vi" ? "LƯU VÀ XUẤT" : "SAVE & EXPORT"}</div>
+        <div class="group-caption">${t("grp_save_export")}</div>
       </div>
       <div class="ribbon-group">
         <div class="tools">
-          <button class="tool-button" id="outputTakeoffBtn" title="${currentLang === "vi" ? "Thống kê khối lượng" : "Quantity takeoff"}"><span class="tool-icon">▥</span><span class="ribbon-command-label">${currentLang === "vi" ? "Thống kê" : "Takeoff"}</span></button>
+          <button class="tool-button" id="outputTakeoffBtn" title="${t("title_takeoff")}"><span class="tool-icon">▥</span><span class="ribbon-command-label">${t("label_takeoff")}</span></button>
         </div>
-        <div class="group-caption">${currentLang === "vi" ? "THỐNG KÊ" : "QUANTITIES"}</div>
+        <div class="group-caption">${t("grp_quantities")}</div>
       </div>
       <div class="ribbon-spacer"></div>
     `;
@@ -2896,37 +2912,36 @@ function chooseTool(tool) {
   $$("[data-tool]").forEach((b) => b.classList.toggle("selected", b.dataset.tool === tool));
 
   const msgs = {
-    select: currentLang === "vi" ? "Chọn hình (nhấp chọn, quét chuột hộp xanh Window/Crossing, Delete để xóa)" : "Select geometry (Click, Box Window/Crossing drag, Delete to erase)",
-    line: currentLang === "vi" ? "LINE · Chọn điểm đầu tiên (hoặc nhập x,y)" : "LINE · Pick first point",
-    arc: currentLang === "vi" ? "ARC · Chọn 3 điểm (Đầu, Giữa, Cuối)" : "ARC · Pick 3 points (Start, Mid, End)",
-    polyline: currentLang === "vi" ? "PLINE · Chọn các đỉnh; nhấn Enter để kết thúc" : "PLINE · Pick vertices; Enter to finish",
-    circle: currentLang === "vi" ? "CIRCLE · Chọn tâm đường tròn, sau đó chọn bán kính" : "CIRCLE · Pick center, then radius",
-    rectangle: currentLang === "vi" ? "RECTANGLE · Chọn góc đầu tiên, sau đó chọn góc đối diện" : "RECTANGLE · Pick first corner, then opposite corner",
-    move: currentLang === "vi" ? "MOVE · Chọn điểm gốc để di chuyển" : "MOVE · Pick base point",
-    copy: currentLang === "vi" ? "COPY · Chọn điểm gốc để sao chép" : "COPY · Pick base point",
-    rotate: currentLang === "vi" ? "ROTATE · Chọn tâm xoay và nhập góc xoay" : "ROTATE · Pick center and angle",
-    mirror: currentLang === "vi" ? "MIRROR · Chọn 2 điểm tạo trục đối xứng" : "MIRROR · Pick 2 mirror line points",
-    dist: currentLang === "vi" ? "DIST · Chọn 2 điểm để đo khoảng cách" : "DIST · Pick 2 points to measure",
-    area: currentLang === "vi" ? "AREA · Chọn các đỉnh đa giác hoặc hình khép kín; Enter để tính" : "AREA · Pick polygon vertices; Enter to finish",
-    dim: currentLang === "vi" ? "DIM · Chọn 2 điểm đo rồi chọn vị trí đường kích thước" : "DIM · Pick 2 measurement points then offset position",
-    text: currentLang === "vi" ? "TEXT · Nhấp điểm chèn chữ (hoặc gõ tọa độ x,y)" : "TEXT · Pick text insertion point",
-    fillet: currentLang === "vi" ? "FILLET · Chọn đường 1 rồi chọn đường 2 để bo góc" : "FILLET · Pick first line then second line",
-    chamfer: currentLang === "vi" ? "CHAMFER · Chọn đường 1 rồi chọn đường 2 để vát mép" : "CHAMFER · Pick first line then second line",
-    trim: currentLang === "vi" ? "TRIM · Nhấp đoạn thẳng cần cắt xén" : "TRIM · Click segment to trim",
-    extend: currentLang === "vi" ? "EXTEND · Nhấp đầu mút cần kéo dài đến biên" : "EXTEND · Click end to extend to boundary",
-    join: currentLang === "vi" ? "JOIN · Chọn các đoạn thẳng/cung nối tiếp nhau để gộp thành Polyline" : "JOIN · Select contiguous entities to join",
-    spline: currentLang === "vi" ? "SPLINE · Nhấp chọn các điểm điều khiển; nhấn Enter để hoàn tất đường cong" : "SPLINE · Pick fit points; Enter to finish curve",
-    revcloud: currentLang === "vi" ? "REVCLOUD · Nhấp các điểm mốc tạo biên dạng; nhấn Enter để đóng đám mây ghi chú" : "REVCLOUD · Pick vertices; Enter to close revision cloud",
-    hatch: currentLang === "vi" ? "HATCH · Nhấp vào hình tròn, chữ nhật hoặc đường khép kín để tạo mặt cắt ANSI31" : "HATCH · Click inside closed entity to hatch"
+    select: t("prompt_select"),
+    line: t("prompt_line_start"),
+    arc: t("prompt_arc_start"),
+    polyline: t("prompt_polyline_start"),
+    circle: t("prompt_circle_start"),
+    rectangle: t("prompt_rectangle_start"),
+    move: selectedHandles.size ? t("prompt_move_base") : t("prompt_move_need_selection"),
+    copy: selectedHandles.size ? t("prompt_copy_base") : t("prompt_copy_need_selection"),
+    rotate: selectedHandles.size ? t("prompt_rotate_base") : t("prompt_rotate_need_selection"),
+    mirror: selectedHandles.size ? t("prompt_mirror_axis_start") : t("prompt_mirror_need_selection"),
+    offset: t("prompt_offset_need_entity"),
+    dist: t("prompt_dist_start"),
+    area: t("prompt_area_start"),
+    dim: t("prompt_dim_start"),
+    text: t("prompt_text_start"),
+    fillet: t("prompt_fillet_start"),
+    chamfer: t("prompt_chamfer_start"),
+    trim: t("prompt_trim_start"),
+    extend: t("prompt_extend_start"),
+    join: t("prompt_join_start"),
+    spline: t("prompt_spline_start"),
+    revcloud: t("prompt_revcloud_start"),
+    hatch: t("prompt_hatch_start")
   };
 
-  setStatus(msgs[tool] || "Ready");
+  setStatus(msgs[tool] || t("ready_status"));
   if (tool !== "select") logCommand(msgs[tool] || tool.toUpperCase());
   const commandInput = $("#commandInput");
   if (commandInput) {
-    commandInput.placeholder = tool === "select"
-      ? t("cmd_placeholder")
-      : `${tool.toUpperCase()} · ${msgs[tool] || "Enter value or pick a point"}`;
+    commandInput.placeholder = tool === "select" ? t("cmd_placeholder") : (msgs[tool] || t("prompt_value_or_point"));
   }
   draw();
   const vp = $("#viewport");
@@ -2958,9 +2973,9 @@ function render() {
       .map(
         (l) => `
         <div class="layer-row ${l.name === model.currentLayer ? "current" : ""}" data-layer-handle="${escapeHtml(l.handle)}">
-          <span class="layer-title"><i class="layer-swatch" style="background: ${l.color || '#79c9dc'}; box-shadow: 0 0 4px ${l.color || '#79c9dc'}44;" title="Đổi màu Layer" data-layer-color="${escapeHtml(l.name)}"></i>${escapeHtml(l.name)}</span>
-          <span class="layer-eye" title="Toggle Visibility">${l.off ? "—" : "◉"}</span>
-          <span class="layer-lock" title="Toggle Lock">${l.locked ? "▣" : "—"}</span>
+          <span class="layer-title"><button type="button" class="layer-swatch" style="background: ${l.color || '#79c9dc'}; box-shadow: 0 0 4px ${l.color || '#79c9dc'}44;" title="${t("layer_change_color")}" aria-label="${t("layer_change_color")}" data-layer-color="${escapeHtml(l.name)}"></button>${escapeHtml(l.name)}</span>
+          <button type="button" class="layer-eye" title="${t("layer_toggle_visibility")}" aria-label="${t("layer_toggle_visibility")}" aria-pressed="${!l.off}">${l.off ? "—" : "◉"}</button>
+          <button type="button" class="layer-lock" title="${t("layer_toggle_lock")}" aria-label="${t("layer_toggle_lock")}" aria-pressed="${l.locked}">${l.locked ? "▣" : "—"}</button>
         </div>`
       )
       .join("");
@@ -3008,7 +3023,7 @@ function renderProperties() {
       <div class="property-row"><span>${t("prop_entities")}</span><strong>${model.entityCount}</strong></div>
       <div class="property-row"><span>${t("prop_layer")}</span><strong>${escapeHtml(model.currentLayer)}</strong></div>
       <div class="property-row"><span>${t("prop_selection")}</span><strong>${t("prop_none")}</strong></div>
-      <div class="property-row"><span>${t("prop_units")}</span><strong>Metric (mm)</strong></div>
+      <div class="property-row"><span>${t("prop_units")}</span><strong>${t("prop_units_metric_mm")}</strong></div>
     `;
   } else if (count === 1) {
     const handle = Array.from(selectedHandles)[0];
@@ -3020,27 +3035,27 @@ function renderProperties() {
       const len = Math.hypot(ent.x2 - ent.x1, ent.y2 - ent.y1).toFixed(3);
       details = `
         <div class="property-row"><span>${t("prop_length")}</span><strong>${len}</strong></div>
-        <div class="property-row"><span>Start X</span><input class="prop-input" id="propLineX1" type="number" step="any" value="${ent.x1.toFixed(2)}" /></div>
-        <div class="property-row"><span>Start Y</span><input class="prop-input" id="propLineY1" type="number" step="any" value="${ent.y1.toFixed(2)}" /></div>
-        <div class="property-row"><span>End X</span><input class="prop-input" id="propLineX2" type="number" step="any" value="${ent.x2.toFixed(2)}" /></div>
-        <div class="property-row"><span>End Y</span><input class="prop-input" id="propLineY2" type="number" step="any" value="${ent.y2.toFixed(2)}" /></div>
+        <div class="property-row"><span>${t("prop_start_x")}</span><input class="prop-input" id="propLineX1" type="number" step="any" value="${ent.x1.toFixed(2)}" aria-label="${t("prop_start_x")}" /></div>
+        <div class="property-row"><span>${t("prop_start_y")}</span><input class="prop-input" id="propLineY1" type="number" step="any" value="${ent.y1.toFixed(2)}" aria-label="${t("prop_start_y")}" /></div>
+        <div class="property-row"><span>${t("prop_end_x")}</span><input class="prop-input" id="propLineX2" type="number" step="any" value="${ent.x2.toFixed(2)}" aria-label="${t("prop_end_x")}" /></div>
+        <div class="property-row"><span>${t("prop_end_y")}</span><input class="prop-input" id="propLineY2" type="number" step="any" value="${ent.y2.toFixed(2)}" aria-label="${t("prop_end_y")}" /></div>
       `;
     } else if (ent.kind === "circle") {
       const circum = (2 * Math.PI * ent.radius).toFixed(2);
       const area = (Math.PI * ent.radius * ent.radius).toFixed(2);
       details = `
-        <div class="property-row"><span>${t("prop_radius")}</span><input class="prop-input" id="propCircleRadius" type="number" step="any" value="${ent.radius.toFixed(3)}" /></div>
-        <div class="property-row"><span>Center X</span><input class="prop-input" id="propCircleCx" type="number" step="any" value="${ent.cx.toFixed(2)}" /></div>
-        <div class="property-row"><span>Center Y</span><input class="prop-input" id="propCircleCy" type="number" step="any" value="${ent.cy.toFixed(2)}" /></div>
-        <div class="property-row"><span>Chu vi (C)</span><strong>${circum}</strong></div>
-        <div class="property-row"><span>Diện tích (S)</span><strong>${area}</strong></div>
+        <div class="property-row"><span>${t("prop_radius")}</span><input class="prop-input" id="propCircleRadius" type="number" step="any" value="${ent.radius.toFixed(3)}" aria-label="${t("prop_radius")}" /></div>
+        <div class="property-row"><span>${t("prop_center_x")}</span><input class="prop-input" id="propCircleCx" type="number" step="any" value="${ent.cx.toFixed(2)}" aria-label="${t("prop_center_x")}" /></div>
+        <div class="property-row"><span>${t("prop_center_y")}</span><input class="prop-input" id="propCircleCy" type="number" step="any" value="${ent.cy.toFixed(2)}" aria-label="${t("prop_center_y")}" /></div>
+        <div class="property-row"><span>${t("prop_circumference")}</span><strong>${circum}</strong></div>
+        <div class="property-row"><span>${t("prop_area")}</span><strong>${area}</strong></div>
       `;
     } else if (ent.kind === "text") {
       details = `
-        <div class="property-row"><span>Text</span><input class="prop-input" id="propTextValue" type="text" value="${escapeHtml(ent.text)}" /></div>
-        <div class="property-row"><span>X</span><input class="prop-input" id="propTextX" type="number" step="any" value="${ent.x.toFixed(2)}" /></div>
-        <div class="property-row"><span>Y</span><input class="prop-input" id="propTextY" type="number" step="any" value="${ent.y.toFixed(2)}" /></div>
-        <div class="property-row"><span>Height</span><input class="prop-input" id="propTextHeight" type="number" step="any" value="${(ent.height || 2.5).toFixed(2)}" /></div>
+        <div class="property-row"><span>${t("prop_text")}</span><input class="prop-input" id="propTextValue" type="text" value="${escapeHtml(ent.text)}" aria-label="${t("prop_text")}" /></div>
+        <div class="property-row"><span>X</span><input class="prop-input" id="propTextX" type="number" step="any" value="${ent.x.toFixed(2)}" aria-label="X" /></div>
+        <div class="property-row"><span>Y</span><input class="prop-input" id="propTextY" type="number" step="any" value="${ent.y.toFixed(2)}" aria-label="Y" /></div>
+        <div class="property-row"><span>${t("prop_height")}</span><input class="prop-input" id="propTextHeight" type="number" step="any" value="${(ent.height || 2.5).toFixed(2)}" aria-label="${t("prop_height")}" /></div>
       `;
     } else if (ent.kind === "arc") {
       details = `
@@ -3050,12 +3065,12 @@ function renderProperties() {
       `;
     } else if (ent.kind === "insert") {
       details = `
-        <div class="property-row"><span>Block Name</span><strong>${escapeHtml(ent.blockName)}</strong></div>
-        <div class="property-row"><span>Insert X</span><strong>${ent.x.toFixed(2)}</strong></div>
-        <div class="property-row"><span>Insert Y</span><strong>${ent.y.toFixed(2)}</strong></div>
-        <div class="property-row"><span>Scale X</span><strong>${(ent.scaleX || 1).toFixed(2)}</strong></div>
-        <div class="property-row"><span>Scale Y</span><strong>${(ent.scaleY || 1).toFixed(2)}</strong></div>
-        <div class="property-row"><span>Rotation</span><strong>${((ent.rotation * 180 / Math.PI) % 360).toFixed(1)}°</strong></div>
+        <div class="property-row"><span>${t("prop_block_name")}</span><strong>${escapeHtml(ent.blockName)}</strong></div>
+        <div class="property-row"><span>${t("prop_insert_x")}</span><strong>${ent.x.toFixed(2)}</strong></div>
+        <div class="property-row"><span>${t("prop_insert_y")}</span><strong>${ent.y.toFixed(2)}</strong></div>
+        <div class="property-row"><span>${t("prop_scale_x")}</span><strong>${(ent.scaleX || 1).toFixed(2)}</strong></div>
+        <div class="property-row"><span>${t("prop_scale_y")}</span><strong>${(ent.scaleY || 1).toFixed(2)}</strong></div>
+        <div class="property-row"><span>${t("prop_rotation")}</span><strong>${((ent.rotation * 180 / Math.PI) % 360).toFixed(1)}°</strong></div>
       `;
     } else if (ent.kind === "polyline") {
       details = `
@@ -3069,9 +3084,9 @@ function renderProperties() {
       <div class="property-row"><span>${t("prop_type")}</span><strong>${ent.kind.toUpperCase()}</strong></div>
       <div class="property-row"><span>${t("prop_handle")}</span><strong>#${ent.handle}</strong></div>
       <div class="property-row">
-        <span>Layer</span>
-        <select id="propLayerSelect" class="prop-select">
-          ${model.layers.map((l) => `<option value="${l.name}" ${l.name === ent.layer ? "selected" : ""}>${escapeHtml(l.name)}</option>`).join("")}
+        <span>${t("prop_entity_layer")}</span>
+        <select id="propLayerSelect" class="prop-select" aria-label="${t("prop_entity_layer")}">
+          ${model.layers.map((l) => `<option value="${escapeHtml(l.name)}" ${l.name === ent.layer ? "selected" : ""}>${escapeHtml(l.name)}</option>`).join("")}
         </select>
       </div>
       ${details}
@@ -3132,12 +3147,12 @@ function renderProperties() {
   } else {
     body.innerHTML = `
       <div class="panel-kicker">${t("prop_multiple")}</div>
-      <div class="property-row"><span>${t("prop_selection")}</span><strong>${count} entities</strong></div>
+      <div class="property-row"><span>${t("prop_selection")}</span><strong>${tf("prop_entity_count", { count })}</strong></div>
       <div class="property-row">
-        <span>Change Layer</span>
-        <select id="propBatchLayerSelect" class="prop-select">
-          <option value="">(Select Layer)</option>
-          ${model.layers.map((l) => `<option value="${l.name}">${escapeHtml(l.name)}</option>`).join("")}
+        <span>${t("prop_change_layer")}</span>
+        <select id="propBatchLayerSelect" class="prop-select" aria-label="${t("prop_change_layer")}">
+          <option value="">${t("prop_select_layer")}</option>
+          ${model.layers.map((l) => `<option value="${escapeHtml(l.name)}">${escapeHtml(l.name)}</option>`).join("")}
         </select>
       </div>
       <div class="prop-actions">
@@ -3308,7 +3323,7 @@ async function finishSpline() {
   if (points.length < 2) {
     points = [];
     chooseTool("select");
-    setStatus(currentLang === "vi" ? "Đã hủy SPLINE: cần ít nhất 2 điểm" : "SPLINE canceled: at least 2 points are required");
+    setStatus(t("spline_cancelled"));
     draw();
     return false;
   }
@@ -3321,7 +3336,7 @@ async function finishSpline() {
   )) return false;
   points = [];
   chooseTool("select");
-  setStatus(currentLang === "vi" ? "Đã tạo đường cong Spline (SPLINE)" : "Spline curve created");
+  setStatus(t("spline_created"));
   draw();
   return true;
 }
@@ -3330,7 +3345,7 @@ async function finishRevcloud() {
   if (points.length < 2) {
     points = [];
     chooseTool("select");
-    setStatus(currentLang === "vi" ? "Đã hủy REVCLOUD: cần ít nhất 2 điểm" : "REVCLOUD canceled: at least 2 points are required");
+    setStatus(t("revcloud_cancelled"));
     draw();
     return false;
   }
@@ -3343,7 +3358,7 @@ async function finishRevcloud() {
   )) return false;
   points = [];
   chooseTool("select");
-  setStatus(currentLang === "vi" ? "Đã tạo đám mây ghi chú (REVCLOUD)" : "Revision Cloud created");
+  setStatus(t("revcloud_created"));
   draw();
   return true;
 }
@@ -3352,7 +3367,7 @@ async function finishPolyline(closed = false) {
   if (points.length < 2) {
     points = [];
     chooseTool("select");
-    setStatus(currentLang === "vi" ? "Đã hủy PLINE: cần ít nhất 2 đỉnh" : "PLINE canceled: at least 2 vertices are required");
+    setStatus(t("polyline_cancelled"));
     draw();
     return false;
   }
@@ -3364,9 +3379,7 @@ async function finishPolyline(closed = false) {
   )) return false;
   points = [];
   chooseTool("select");
-  setStatus(currentLang === "vi"
-    ? (closed ? "Đã tạo PLINE khép kín" : "Đã tạo PLINE")
-    : (closed ? "Closed Polyline created" : "Polyline created"));
+  setStatus(t(closed ? "polyline_closed_created" : "polyline_created"));
   draw();
   return true;
 }
@@ -3375,8 +3388,8 @@ function undoPolylineVertex() {
   if (activeTool !== "polyline" || points.length === 0) return false;
   points.pop();
   setStatus(points.length
-    ? `PLINE · ${points.length} vertices; Specify next point or [Undo/Close]`
-    : "PLINE · Specify first point");
+    ? t("prompt_polyline_next").replace("{count}", String(points.length))
+    : t("prompt_polyline_first"));
   draw();
   return true;
 }
@@ -3387,7 +3400,7 @@ async function acceptCurrentCommand() {
   } else if (activeTool === "line" && points.length > 0) {
     points = [];
     chooseTool("select");
-    setStatus("LINE finished");
+    setStatus(t("prompt_line_finished"));
   } else if (activeTool === "polyline") {
     await finishPolyline(false);
   } else if (activeTool === "spline") {
@@ -3396,7 +3409,11 @@ async function acceptCurrentCommand() {
     await finishRevcloud();
   } else if (activeTool === "area" && points.length >= 3) {
     const res = calculatePolygonArea(points);
-    measureInfo = `Area = ${res.area.toFixed(2)} mm² (${(res.area / 1e6).toFixed(4)} m²) | Perimeter = ${res.perimeter.toFixed(2)} mm`;
+    measureInfo = tf("result_area", {
+      area: res.area.toFixed(2),
+      areaM2: (res.area / 1e6).toFixed(4),
+      perimeter: res.perimeter.toFixed(2),
+    });
     points = [];
     setStatus(measureInfo);
     renderRibbon();
@@ -3559,13 +3576,13 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         await sync(invoke("add_line", { x1: points[0].x, y1: points[0].y, x2: p.x, y2: p.y }));
         // AutoCAD LINE stays active: the previous endpoint becomes the next start point.
         points = [p];
-        setStatus("LINE · Specify next point or press Enter to finish");
+        setStatus(t("prompt_line_next_finish"));
       } else {
-        setStatus("LINE · Specify next point");
+        setStatus(t("prompt_line_next"));
       }
     } else if (activeTool === "polyline") {
       points.push({ ...p, bulge: 0 });
-      setStatus(`PLINE · ${points.length} vertices; Specify next point or [Undo/Close]`);
+      setStatus(t("prompt_polyline_next").replace("{count}", String(points.length)));
     } else if (activeTool === "circle") {
       points.push(p);
       if (points.length === 2) {
@@ -3573,37 +3590,41 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         if (radius > 1e-6) {
           const c = points[0];
           await sync(invoke("add_circle", { cx: c.x, cy: c.y, radius }));
-          setStatus(currentLang === "vi" ? "Đã tạo đường tròn (CIRCLE)" : "CIRCLE created");
+          setStatus(t("prompt_circle_created"));
         }
         points = [];
       } else {
-        setStatus(currentLang === "vi" ? "CIRCLE · Chọn điểm xác định bán kính" : "CIRCLE · Pick radius point");
+        setStatus(t("prompt_circle_radius"));
       }
     } else if (activeTool === "text") {
-      const textVal = prompt(currentLang === "vi" ? "Nhập nội dung văn bản:" : "Enter text content:", "CONCOSTCAD");
+      const textVal = prompt(t("prompt_text_content"), "CONCOSTCAD");
+      let createdText = null;
       if (textVal && textVal.trim()) {
-        const heightStr = prompt(currentLang === "vi" ? "Nhập chiều cao chữ (Height):" : "Enter text height:", "2.5");
+        const heightStr = prompt(t("prompt_text_height"), "2.5");
         const height = parseFloat(heightStr) || 2.5;
         await sync(invoke("add_text", { value: textVal.trim(), x: p.x, y: p.y, height, rotation: 0.0 }));
-        setStatus(currentLang === "vi" ? `Đã tạo chữ: "${textVal}"` : `TEXT created: "${textVal}"`);
+        createdText = textVal.trim();
       }
       points = [];
       chooseTool("select");
+      if (createdText !== null) setStatus(tf("result_text", { value: createdText }));
     } else if (activeTool === "fillet") {
       const hit = await hitTestEntity(p, 8 / zoom);
       if (hit) {
         points.push(hit);
         if (points.length === 1) {
-          setStatus(currentLang === "vi" ? `FILLET · Đã chọn đường 1 (#${hit.handle}). Chọn đường thứ 2` : `FILLET · Pick second line`);
+          setStatus(tf("prompt_fillet_second", { handle: hit.handle }));
         } else if (points.length === 2) {
-          const rStr = prompt(currentLang === "vi" ? "Nhập bán kính bo góc (R = 0 để bo góc vuông):" : "Enter fillet radius (R = 0 for square corner):", filletRadius.toString());
+          const rStr = prompt(t("prompt_fillet_radius"), filletRadius.toString());
+          let filletResult = null;
           if (rStr !== null) {
             filletRadius = parseFloat(rStr) || 0;
             await sync(invoke("fillet_lines", { h1: points[0].handle, h2: points[1].handle, radius: filletRadius }));
-            setStatus(currentLang === "vi" ? `Đã bo góc (FILLET R=${filletRadius})` : `Filleted with R=${filletRadius}`);
+            filletResult = tf("result_fillet", { radius: filletRadius });
           }
           points = [];
           chooseTool("select");
+          if (filletResult) setStatus(filletResult);
         }
       }
     } else if (activeTool === "chamfer") {
@@ -3611,18 +3632,20 @@ function bindCanvasEvents(viewportEl, canvasEl) {
       if (hit) {
         points.push(hit);
         if (points.length === 1) {
-          setStatus(currentLang === "vi" ? `CHAMFER · Đã chọn đường 1 (#${hit.handle}). Chọn đường thứ 2` : `CHAMFER · Pick second line`);
+          setStatus(tf("prompt_chamfer_second", { handle: hit.handle }));
         } else if (points.length === 2) {
-          const dStr = prompt(currentLang === "vi" ? "Nhập khoảng cách vát mép (D1, D2):" : "Enter chamfer distance (D1, D2):", `${chamferDist},${chamferDist}`);
+          const dStr = prompt(t("prompt_chamfer_distances"), `${chamferDist},${chamferDist}`);
+          let chamferResult = null;
           if (dStr !== null) {
             const parts = dStr.split(',').map(s => parseFloat(s.trim()));
             const d1 = parts[0] || 2;
             const d2 = parts[1] || d1;
             await sync(invoke("chamfer_lines", { h1: points[0].handle, h2: points[1].handle, d1, d2 }));
-            setStatus(currentLang === "vi" ? `Đã vát mép (CHAMFER D1=${d1}, D2=${d2})` : `Chamfered with D1=${d1}, D2=${d2}`);
+            chamferResult = tf("result_chamfer", { d1, d2 });
           }
           points = [];
           chooseTool("select");
+          if (chamferResult) setStatus(chamferResult);
         }
       }
     } else if (activeTool === "trim") {
@@ -3631,7 +3654,7 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         const allOtherHandles = model.entities.filter(ent => ent.handle !== hit.handle).map(ent => ent.handle);
         const ok = await sync(invoke("trim_line", { targetHandle: hit.handle, clickX: p.x, clickY: p.y, cutterHandles: allOtherHandles }));
         if (ok) {
-          setStatus(currentLang === "vi" ? "Đã cắt xén đối tượng (TRIM)" : "Line trimmed");
+          setStatus(t("result_trim"));
         }
       }
     } else if (activeTool === "extend") {
@@ -3640,14 +3663,14 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         const allOtherHandles = model.entities.filter(ent => ent.handle !== hit.handle).map(ent => ent.handle);
         const ok = await sync(invoke("extend_line", { targetHandle: hit.handle, clickX: p.x, clickY: p.y, boundaryHandles: allOtherHandles }));
         if (ok) {
-          setStatus(currentLang === "vi" ? "Đã kéo dài đối tượng (EXTEND)" : "Line extended to boundary");
+          setStatus(t("result_extend"));
         }
       }
     } else if (activeTool === "join") {
       if (selectedHandles.size >= 2) {
         await sync(invoke("join_entities", { handles: Array.from(selectedHandles) }));
-        setStatus(currentLang === "vi" ? "Đã nối các đối tượng thành Polyline (JOIN)" : "Entities joined into Polyline");
         chooseTool("select");
+        setStatus(t("result_join"));
       } else {
         const hit = await hitTestEntity(p, 8 / zoom);
         if (hit) {
@@ -3656,10 +3679,10 @@ function bindCanvasEvents(viewportEl, canvasEl) {
           draw();
           if (selectedHandles.size >= 2) {
             await sync(invoke("join_entities", { handles: Array.from(selectedHandles) }));
-            setStatus(currentLang === "vi" ? "Đã nối các đối tượng thành Polyline (JOIN)" : "Entities joined into Polyline");
             chooseTool("select");
+            setStatus(t("result_join"));
           } else {
-            setStatus(currentLang === "vi" ? "JOIN · Chọn đối tượng tiếp theo để nối" : "JOIN · Pick next entity to join");
+            setStatus(t("prompt_join_next"));
           }
         }
       }
@@ -3675,13 +3698,13 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         ];
         await sync(invoke("add_polyline", { points: rectPoints, closed: true }));
         points = [];
-        setStatus("RECTANGLE created");
+        setStatus(t("prompt_rectangle_created"));
       } else {
-        setStatus("RECTANGLE · Pick opposite corner");
+        setStatus(t("prompt_rectangle_opposite"));
       }
     } else if (activeTool === "arc") {
       points.push(p);
-      setStatus(`ARC · ${points.length}/3 points`);
+      setStatus(t("prompt_arc_progress").replace("{count}", String(points.length)));
       if (points.length === 3) {
         const [a, b, c] = points;
         const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
@@ -3695,9 +3718,9 @@ function bindCanvasEvents(viewportEl, canvasEl) {
           const ccw = (to, from) => (to - from + Math.PI * 2) % (Math.PI * 2);
           if (ccw(mid, start) > ccw(end, start)) [start, end] = [end, start];
           await sync(invoke("add_arc", { x: ux, y: uy, radius, start, end }));
-          setStatus("ARC created");
+          setStatus(t("prompt_arc_created"));
         } else {
-          setStatus("ARC points are collinear");
+          setStatus(t("prompt_arc_collinear"));
         }
         points = [];
       }
@@ -3707,24 +3730,24 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         if (hit) {
           selectedHandles.add(hit.handle);
           renderProperties();
-          setStatus("MOVE · Objects selected; pick base point");
+          setStatus(t("prompt_move_base"));
           draw();
           return;
         } else {
-          setStatus("MOVE · Select objects first");
+          setStatus(t("prompt_move_need_selection"));
           return;
         }
       }
       if (!moveBasePoint) {
         moveBasePoint = p;
-        setStatus("MOVE · Specify destination point");
+        setStatus(t("prompt_move_destination"));
       } else {
         const dx = p.x - moveBasePoint.x;
         const dy = p.y - moveBasePoint.y;
         await sync(invoke("move_entities", { handles: Array.from(selectedHandles), dx, dy }));
         moveBasePoint = null;
         chooseTool("select");
-        setStatus(`Moved ${selectedHandles.size} object(s)`);
+        setStatus(tf("result_move", { count: selectedHandles.size }));
       }
     } else if (activeTool === "copy") {
       if (selectedHandles.size === 0) {
@@ -3732,24 +3755,24 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         if (hit) {
           selectedHandles.add(hit.handle);
           renderProperties();
-          setStatus("COPY · Objects selected; pick base point");
+          setStatus(t("prompt_copy_base"));
           draw();
           return;
         } else {
-          setStatus("COPY · Select objects first");
+          setStatus(t("prompt_copy_need_selection"));
           return;
         }
       }
       if (!moveBasePoint) {
         moveBasePoint = p;
-        setStatus("COPY · Specify copy destination point");
+        setStatus(t("prompt_copy_destination"));
       } else {
         const dx = p.x - moveBasePoint.x;
         const dy = p.y - moveBasePoint.y;
         await sync(invoke("copy_entities", { handles: Array.from(selectedHandles), dx, dy }));
         moveBasePoint = null;
         chooseTool("select");
-        setStatus(`Copied ${selectedHandles.size} object(s)`);
+        setStatus(tf("result_copy", { count: selectedHandles.size }));
       }
     } else if (activeTool === "rotate") {
       if (selectedHandles.size === 0) {
@@ -3757,23 +3780,23 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         if (hit) {
           selectedHandles.add(hit.handle);
           renderProperties();
-          setStatus("ROTATE · Objects selected; pick base point");
+          setStatus(t("prompt_rotate_base"));
           draw();
           return;
         } else {
-          setStatus("ROTATE · Select objects first");
+          setStatus(t("prompt_rotate_need_selection"));
           return;
         }
       }
       if (!moveBasePoint) {
         moveBasePoint = p;
-        setStatus("ROTATE · Pick second point to specify angle, or type angle in degrees");
+        setStatus(t("prompt_rotate_angle"));
       } else {
         const ang = Math.atan2(p.y - moveBasePoint.y, p.x - moveBasePoint.x) * (180 / Math.PI);
         await sync(invoke("rotate_entities", { handles: Array.from(selectedHandles), cx: moveBasePoint.x, cy: moveBasePoint.y, angleDeg: ang }));
         moveBasePoint = null;
         chooseTool("select");
-        setStatus(`Rotated by ${ang.toFixed(1)}°`);
+        setStatus(tf("result_rotate", { count: selectedHandles.size, angle: ang.toFixed(1) }));
       }
     } else if (activeTool === "mirror") {
       if (selectedHandles.size === 0) {
@@ -3781,11 +3804,11 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         if (hit) {
           selectedHandles.add(hit.handle);
           renderProperties();
-          setStatus("MIRROR · Object selected; pick first axis point");
+          setStatus(t("prompt_mirror_axis_start"));
           draw();
           return;
         }
-        setStatus("MIRROR · Select objects first");
+        setStatus(t("prompt_mirror_need_selection"));
         return;
       }
       points.push(p);
@@ -3800,32 +3823,32 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         }));
         points = [];
         chooseTool("select");
-        setStatus("Mirrored objects created");
+        setStatus(tf("result_mirror", { count: selectedHandles.size }));
       } else {
-        setStatus("MIRROR · Pick second point of mirror axis");
+        setStatus(t("prompt_mirror_axis_end"));
       }
     } else if (activeTool === "offset") {
       if (!offsetTargetHandle) {
         const hit = await hitTestEntity(p, 8 / zoom);
         if (hit) {
           offsetTargetHandle = hit.handle;
-          setStatus(`OFFSET · Pick side to offset (Distance = ${offsetDist})`);
+          setStatus(tf("prompt_offset_side", { distance: offsetDist }));
         } else {
-          setStatus("OFFSET · Click on an entity to offset");
+          setStatus(t("prompt_offset_need_entity"));
         }
       } else {
         await sync(invoke("offset_entity", { handle: offsetTargetHandle, distance: offsetDist, sideX: p.x, sideY: p.y }));
         offsetTargetHandle = null;
-        setStatus(`Offset created at distance ${offsetDist}`);
         chooseTool("select");
+        setStatus(tf("result_offset", { distance: offsetDist }));
       }
 
     } else if (activeTool === "dim") {
       points.push(p);
       if (points.length === 1) {
-        setStatus(currentLang === "vi" ? "DIM · Chọn điểm đo thứ 2" : "DIM · Pick second point");
+        setStatus(t("prompt_dim_second"));
       } else if (points.length === 2) {
-        setStatus(currentLang === "vi" ? "DIM · Chọn vị trí đường kích thước (Offset point)" : "DIM · Pick dimension offset");
+        setStatus(t("prompt_dim_offset"));
       } else if (points.length === 3) {
         const [p1, p2, pOff] = points;
         const dLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
@@ -3835,7 +3858,7 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         }));
         points = [];
         chooseTool("select");
-        setStatus(currentLang === "vi" ? "Đã ghi kích thước (DIM)" : "Dimension created");
+        setStatus(t("result_dim"));
       }
     } else if (activeTool === "dist") {
       points.push(p);
@@ -3844,16 +3867,21 @@ function bindCanvasEvents(viewportEl, canvasEl) {
         const dx = points[1].x - points[0].x;
         const dy = points[1].y - points[0].y;
         const ang = (Math.atan2(dy, dx) * 180 / Math.PI).toFixed(2);
-        measureInfo = `Dist = ${d.toFixed(3)} | ΔX = ${dx.toFixed(3)}, ΔY = ${dy.toFixed(3)} | Angle = ${ang}°`;
+        measureInfo = tf("result_dist", {
+          distance: d.toFixed(3),
+          dx: dx.toFixed(3),
+          dy: dy.toFixed(3),
+          angle: ang,
+        });
         setStatus(measureInfo);
         points = [];
         renderRibbon();
       } else {
-        setStatus("MEASURE · Pick second point");
+        setStatus(t("prompt_dist_second"));
       }
     } else if (activeTool === "area") {
       points.push(p);
-      setStatus(`AREA · ${points.length} vertices picked; press Enter to calculate area`);
+      setStatus(tf("prompt_area_next", { count: points.length }));
     }
 
     draw();
@@ -4123,12 +4151,55 @@ function cancelCurrentCommand() {
   lastPan = null;
   chooseTool("select");
   if (hadActiveCommand) {
-    logCommand(currentLang === "vi" ? "Đã hủy lệnh" : "Command cancelled", "cancelled");
+    logCommand(t("command_cancelled"), "cancelled");
   }
-  setStatus(currentLang === "vi" ? "Đã hủy lệnh" : "Cancelled");
+  setStatus(t("command_cancelled"));
+}
+
+function routeDynamicInputKey(event) {
+  if (!dynamicInputEnabled || showStartScreen || activeTool === "select" || !cursorViewportPosition) return false;
+  if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey) return false;
+
+  const viewport = $("#viewport");
+  const canvas = $("#cadCanvas");
+  const entry = $("#dynamicInputEntry");
+  const activeElement = document.activeElement;
+  if (!viewport || !entry || (activeElement !== viewport && activeElement !== canvas) || activeElement === entry) return false;
+
+  const key = event.key;
+  const isPrintable = key.length === 1;
+  const isEditKey = key === "Backspace" || key === "Delete";
+  const isCommandKey = ["Enter", "Escape", "ArrowUp", "ArrowDown"].includes(key);
+  if (!isPrintable && !isEditKey && !isCommandKey) return false;
+
+  event.preventDefault();
+  entry.focus({ preventScroll: true });
+
+  if (isPrintable) {
+    const start = entry.selectionStart ?? entry.value.length;
+    const end = entry.selectionEnd ?? entry.value.length;
+    entry.setRangeText(key, start, end, "end");
+    entry.dispatchEvent(new Event("input", { bubbles: true }));
+  } else if (isEditKey) {
+    let start = entry.selectionStart ?? entry.value.length;
+    let end = entry.selectionEnd ?? entry.value.length;
+    if (start === end && key === "Backspace" && start > 0) start--;
+    if (start === end && key === "Delete" && end < entry.value.length) end++;
+    if (start !== end) entry.setRangeText("", start, end, "end");
+    entry.dispatchEvent(new Event("input", { bubbles: true }));
+  } else {
+    entry.dispatchEvent(new KeyboardEvent("keydown", {
+      key,
+      repeat: event.repeat,
+      bubbles: true,
+      cancelable: true,
+    }));
+  }
+  return true;
 }
 
 function handleGlobalKeyDown(event) {
+  if (routeDynamicInputKey(event)) return;
   const action = cadShortcut(event, !showStartScreen);
   if (!action) return;
   event.preventDefault();
@@ -4153,10 +4224,12 @@ function handleGlobalKeyDown(event) {
 function bindCommandBarEvents() {
   const cmdInput = $("#commandInput");
   const historyPanel = $("#commandHistory");
+  cmdInput?.addEventListener("input", () => syncCommandInputDraft(cmdInput));
   historyPanel?.addEventListener("click", (event) => {
     const row = event.target.closest(".command-line[data-command]");
     if (!row || !cmdInput) return;
     cmdInput.value = row.dataset.command;
+    syncCommandInputDraft(cmdInput);
     historyIndex = -1;
     commandDraft = "";
     cmdInput.focus({ preventScroll: true });
@@ -4181,6 +4254,7 @@ function bindCommandBarEvents() {
           else if (historyIndex > 0) historyIndex--;
           cmdInput.value = commandHistory[historyIndex];
         }
+        syncCommandInputDraft(cmdInput);
       }
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -4194,6 +4268,7 @@ function bindCommandBarEvents() {
             commandDraft = "";
           }
         }
+        syncCommandInputDraft(cmdInput);
       }
 
       if (e.key === "Enter") {
@@ -4207,6 +4282,7 @@ function bindCommandBarEvents() {
           commandDraft = "";
         }
         e.currentTarget.value = "";
+        syncCommandInputDraft(e.currentTarget);
         if (!raw) {
           await acceptCurrentCommand();
           return;
@@ -4214,7 +4290,7 @@ function bindCommandBarEvents() {
 
         const cmd = normalizeCommand(raw, activeTool);
         if (cmd === "PLINE_UNDO") {
-          if (!undoPolylineVertex()) setStatus(currentLang === "vi" ? "PLINE chưa có đỉnh để Undo" : "PLINE has no vertex to undo");
+          if (!undoPolylineVertex()) setStatus(t("polyline_undo_empty"));
           return;
         }
         if (cmd === "PLINE_CLOSE") { await finishPolyline(true); return; }
@@ -4246,9 +4322,7 @@ function bindCommandBarEvents() {
         if (cmd === "HATCH") { chooseTool("hatch"); return; }
         if (cmd === "PRECISION") {
           dimPrecision = (dimPrecision + 1) % 4; // Cycles: 0, 1, 2, 3 decimals
-          setStatus(currentLang === "vi"
-            ? `Độ chính xác kích thước: ${dimPrecision} chữ số thập phân (DIMSTYLE)`
-            : `Dimension precision: ${dimPrecision} decimal places (DIMSTYLE)`);
+          setStatus(tf("dim_precision_status", { count: dimPrecision }));
           return;
         }
         if (cmd === "UNDO") { undoAction(); return; }
@@ -4281,16 +4355,14 @@ function bindCommandBarEvents() {
         if (cmd === "COMMAND_LINE") { setCommandbarVisible(!commandbarVisible); return; }
         if (cmd === "CANCEL") { cancelCurrentCommand(); return; }
         if (cmd === "HELP") {
-          setStatus(currentLang === "vi"
-            ? "Nhập alias hoặc tên lệnh; ↑/↓ xem lịch sử; Esc hủy; F12 bật Nhập động; Ctrl+9 bật/tắt Dòng lệnh."
-            : "Enter a command or alias; ↑/↓ browse history; Esc cancels; F12 toggles Dynamic Input; Ctrl+9 toggles Command Line.");
+          setStatus(t("command_help"));
           return;
         }
         if (cmd === "JOIN") {
           if (selectedHandles.size >= 2) {
             await sync(invoke("join_entities", { handles: Array.from(selectedHandles) }));
-            setStatus(currentLang === "vi" ? "Đã nối các đối tượng (JOIN)" : "Entities joined");
             chooseTool("select");
+            setStatus(t("result_join"));
           } else {
             chooseTool("join");
           }
@@ -4308,7 +4380,7 @@ function bindCommandBarEvents() {
           await sync(invoke("rotate_entities", { handles: Array.from(selectedHandles), cx: moveBasePoint.x, cy: moveBasePoint.y, angleDeg: ang }));
           moveBasePoint = null;
           chooseTool("select");
-          setStatus(`Rotated by ${ang}°`);
+          setStatus(tf("result_rotate", { count: selectedHandles.size, angle: ang.toFixed(1) }));
           return;
         }
 
@@ -4318,7 +4390,7 @@ function bindCommandBarEvents() {
             const center = points[0];
             if (await sync(invoke("add_circle", { cx: center.x, cy: center.y, radius: numericValue }))) {
               points = [];
-              setStatus(currentLang === "vi" ? "Đã tạo đường tròn (CIRCLE)" : "CIRCLE created");
+              setStatus(t("prompt_circle_created"));
             }
             draw();
             return;
@@ -4332,7 +4404,7 @@ function bindCommandBarEvents() {
         }
 
         // Relative Polar: @dist<angle
-        const polarMatch = raw.match(/^@?(-?\d+(?:\.\d+)?)\s*<\s*(-?\d+(?:\.\d+)?)$/);
+        const polarMatch = raw.match(RELATIVE_POLAR_COORDINATE_PATTERN);
         if (polarMatch) {
           const dist = Number(polarMatch[1]);
           const deg = Number(polarMatch[2]);
@@ -4344,7 +4416,7 @@ function bindCommandBarEvents() {
         }
 
         // Relative Cartesian: @dx,dy
-        const relMatch = raw.match(/^@(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+        const relMatch = raw.match(RELATIVE_CARTESIAN_COORDINATE_PATTERN);
         if (relMatch) {
           const dx = Number(relMatch[1]);
           const dy = Number(relMatch[2]);
@@ -4355,7 +4427,7 @@ function bindCommandBarEvents() {
         }
 
         // Absolute Coordinates: x,y or x,y,b=bulge
-        const absMatch = raw.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)(?:\s*,\s*b=(-?\d+(?:\.\d+)?))?$/i);
+        const absMatch = raw.match(ABSOLUTE_COORDINATE_PATTERN);
         if (absMatch) {
           const p = { x: Number(absMatch[1]), y: Number(absMatch[2]) };
           if (absMatch[3] && activeTool === "polyline" && points.length > 0) {
@@ -4365,12 +4437,13 @@ function bindCommandBarEvents() {
           return;
         }
 
-        const message = currentLang === "vi" ? `Không rõ lệnh: ${raw}` : `Unknown command: ${raw}`;
+        const message = tf("unknown_command", { command: raw });
         logCommand(message, "error");
         setStatus(message);
       }
       if (e.key === "Escape") {
         e.currentTarget.value = "";
+        syncCommandInputDraft(e.currentTarget);
         historyIndex = -1;
         commandDraft = "";
         cancelCurrentCommand();
@@ -4394,21 +4467,23 @@ async function handleCoordinateInput(p) {
     if (points.length === 2) {
       await sync(invoke("add_line", { x1: points[0].x, y1: points[0].y, x2: p.x, y2: p.y }));
       points = [p];
-      setStatus("LINE · Specify next point or press Enter to finish");
+      setStatus(t("prompt_line_next_finish"));
+    } else {
+      setStatus(t("prompt_line_next"));
     }
   } else if (activeTool === "polyline") {
     points.push({ ...p, bulge: 0 });
-    setStatus(`PLINE · ${points.length} vertices; Specify next point or [Undo/Close]`);
+    setStatus(t("prompt_polyline_next").replace("{count}", String(points.length)));
   } else if (activeTool === "circle") {
     points.push(p);
     if (points.length === 1) {
-      setStatus(currentLang === "vi" ? "CIRCLE · Nhập bán kính hoặc tọa độ điểm bán kính" : "CIRCLE · Enter radius or radius-point coordinates");
+      setStatus(t("prompt_circle_radius_input"));
     } else {
       const center = points[0];
       const radius = Math.hypot(p.x - center.x, p.y - center.y);
       if (radius > 1e-6 && await sync(invoke("add_circle", { cx: center.x, cy: center.y, radius }))) {
         points = [];
-        setStatus(currentLang === "vi" ? "Đã tạo đường tròn (CIRCLE)" : "CIRCLE created");
+        setStatus(t("prompt_circle_created"));
       } else {
         points = [center];
       }
@@ -4416,7 +4491,7 @@ async function handleCoordinateInput(p) {
   } else if (activeTool === "rectangle") {
     points.push(p);
     if (points.length === 1) {
-      setStatus(currentLang === "vi" ? "RECTANGLE · Chọn hoặc nhập góc đối diện" : "RECTANGLE · Pick or enter the opposite corner");
+      setStatus(t("prompt_rectangle_opposite"));
     } else {
       const [first, opposite] = points;
       const rectPoints = [
@@ -4427,7 +4502,7 @@ async function handleCoordinateInput(p) {
       ];
       if (await sync(invoke("add_polyline", { points: rectPoints, closed: true }))) {
         points = [];
-        setStatus(currentLang === "vi" ? "Đã tạo hình chữ nhật" : "RECTANGLE created");
+        setStatus(t("prompt_rectangle_created"));
       } else {
         points = [first];
       }
@@ -4447,9 +4522,13 @@ async function handleCoordinateInput(p) {
         const ccw = (to, from) => (to - from + Math.PI * 2) % (Math.PI * 2);
         if (ccw(mid, start) > ccw(end, start)) [start, end] = [end, start];
         await sync(invoke("add_arc", { x: ux, y: uy, radius, start, end }));
-        setStatus("ARC created");
+        setStatus(t("prompt_arc_created"));
+      } else {
+        setStatus(t("prompt_arc_collinear"));
       }
       points = [];
+    } else {
+      setStatus(t("prompt_arc_progress").replace("{count}", String(points.length)));
     }
   }
   draw();
