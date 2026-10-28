@@ -87,3 +87,4 @@ Khi đang sửa ô Properties, tên lớp hoặc dòng lệnh, Backspace/Delete 
 2. **Lưu tệp an toàn (Atomic Staging):** Nhấp `💾` (Save) hoặc nhấn `Ctrl+S`. CONCOSTCAD lưu bản vẽ qua giai đoạn tệp tạm trung gian trước khi ghi đè, đảm bảo không bao giờ làm hỏng hay mất mát bản vẽ gốc ngay cả khi có sự cố mất điện đột ngột.
 3. **Tự động lưu (Autosave):** Bản vẽ có chỉnh sửa (dirty) được tự động lưu dự phòng định kỳ mỗi 3 phút.
 4. **Document tabs:** Mỗi bản vẽ giữ góc nhìn, mức zoom, vùng pan, Model/Paper space, Layout đã thêm và các đối tượng đang chọn khi chuyển giữa các tab. Layout riêng của bản vẽ khác được ẩn cho tới khi quay lại tab đó. Lệnh đang chờ điểm và thao tác kéo grip bị hủy khi đổi bản vẽ; đối tượng đang chọn và grip của chúng được khôi phục khi quay lại.
+5. **Workspace:** Chế độ Ribbon, thanh truy cập nhanh, trạng thái hiện/thu gọn của Properties và Layers, cùng kích thước các panel được lưu trên máy và khôi phục ở lần mở sau.

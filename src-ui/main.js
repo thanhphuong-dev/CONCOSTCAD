@@ -360,6 +360,28 @@ function ribbonModeIcon(mode = ribbonDisplayMode) {
   return mode === "expanded" ? "⌃" : mode === "panels" ? "▱" : "⌄";
 }
 
+function readBooleanPreferences(key, defaults) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(key) || "{}");
+    if (!stored || typeof stored !== "object" || Array.isArray(stored)) return { ...defaults };
+    return Object.fromEntries(Object.entries(defaults).map(([name, value]) => [
+      name,
+      typeof stored[name] === "boolean" ? stored[name] : value
+    ]));
+  } catch (_) {
+    return { ...defaults };
+  }
+}
+
+function persistPalettePreferences() {
+  try {
+    localStorage.setItem("concostcad_palette_visibility", JSON.stringify(paletteVisibility));
+    localStorage.setItem("concostcad_palette_collapsed", JSON.stringify(paletteCollapsed));
+  } catch (_) {
+    // Workspace preferences are optional; storage failures must not interrupt CAD input.
+  }
+}
+
 let activeRibbonTab = "home";
 const savedRibbonDisplayMode = localStorage.getItem("concostcad_ribbon_display_mode");
 let ribbonDisplayMode = ["expanded", "panels", "tabs"].includes(savedRibbonDisplayMode)
@@ -368,8 +390,8 @@ let ribbonDisplayMode = ["expanded", "panels", "tabs"].includes(savedRibbonDispl
 let showStartScreen = true;
 let startPage = "recent";
 let recentViewMode = "grid";
-const paletteVisibility = { properties: true, layers: true };
-const paletteCollapsed = { properties: false, layers: false };
+const paletteVisibility = readBooleanPreferences("concostcad_palette_visibility", { properties: true, layers: true });
+const paletteCollapsed = readBooleanPreferences("concostcad_palette_collapsed", { properties: false, layers: false });
 const savedPropertiesHeight = Number(localStorage.getItem("concostcad_properties_height"));
 let propertiesPanelHeight = Number.isFinite(savedPropertiesHeight) && savedPropertiesHeight >= 150
   ? Math.min(savedPropertiesHeight, 600)
@@ -1126,11 +1148,13 @@ function refreshPalette(name) {
 
 function togglePaletteCollapsed(name) {
   paletteCollapsed[name] = !paletteCollapsed[name];
+  persistPalettePreferences();
   refreshPalette(name);
 }
 
 function setPaletteVisibility(name, visible) {
   paletteVisibility[name] = visible;
+  persistPalettePreferences();
   refreshPalette(name);
   renderRibbon();
 }
