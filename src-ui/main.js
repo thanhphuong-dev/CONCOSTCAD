@@ -2,6 +2,7 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { bindViewCube, normalizeRotation, rotationAroundCenter, updateViewCube } from "./view-cube.js";
+import { normalizeCommand } from "./command-aliases.js";
 import { cadShortcut, mountShellEvents } from "./shell-events.js";
 import { supportedLanguages, translate } from "./locales.js";
 import "./style.css";
@@ -256,6 +257,9 @@ const savedCommandbarHeight = Number(localStorage.getItem("concostcad_commandbar
 let commandbarHeight = Number.isFinite(savedCommandbarHeight) && savedCommandbarHeight >= 56
   ? Math.min(savedCommandbarHeight, 260)
   : 72;
+let commandbarVisible = localStorage.getItem("concostcad_commandbar_visible") !== "false";
+let dynamicInputEnabled = localStorage.getItem("concostcad_dynamic_input") === "true";
+let cursorViewportPosition = null;
 let closeGuardBound = false;
 let menuDismissBound = false;
 let shellEvents = null;
@@ -276,9 +280,29 @@ let selectedHandles = new Set();
 let activeGrip = null;
 
 // Command History State (Tuần 28)
-let commandHistory = [];
+function loadCommandHistory() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("concostcad_command_history") || "[]");
+    return Array.isArray(saved)
+      ? saved.filter((entry) => typeof entry === "string" && entry.trim()).slice(-50)
+      : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function persistCommandHistory() {
+  try {
+    localStorage.setItem("concostcad_command_history", JSON.stringify(commandHistory.slice(-50)));
+  } catch (_) {
+    // Keep the in-memory history available if storage is unavailable.
+  }
+}
+
+let commandHistory = loadCommandHistory();
 let historyIndex = -1;
-let commandLog = [];
+let commandDraft = "";
+let commandLog = commandHistory.map((command) => ({ text: `> ${command}`, kind: "input", command }));
 
 // Offset Tool State (Tuần 25)
 let offsetDist = 20.0;
@@ -301,6 +325,7 @@ const app = $("#app");
 // Render Base Shell
 function renderShell() {
   shellEvents?.dispose();
+  cursorViewportPosition = null;
   document.body.classList.remove("resizing-palette", "resizing-palette-width", "resizing-commandbar");
   const recent = getRecentDrawings();
   const shellTitle = showStartScreen
@@ -400,6 +425,7 @@ function renderShell() {
           <button type="button" disabled><span>Arrange Icons</span></button>
           ${menuWindowDocs ? `<div class="menu-separator"></div>${menuWindowDocs}` : ""}
           <div class="menu-separator"></div>
+          <button id="menuToggleCommandLine" class="${commandbarVisible ? "checked" : ""}"><span>${t("command_line")} <kbd>Ctrl+9</kbd></span><span class="menu-check" aria-hidden="true">${commandbarVisible ? "✓" : ""}</span></button>
           <button id="menuToggleProperties" class="${paletteVisibility.properties ? "checked" : ""}"><span>Properties palette</span>${paletteVisibility.properties ? "✓" : ""}</button>
           <button id="menuToggleLayers" class="${paletteVisibility.layers ? "checked" : ""}"><span>Layer palette</span>${paletteVisibility.layers ? "✓" : ""}</button>
         </div>
@@ -454,6 +480,14 @@ function renderShell() {
             <i class="crosshair-line crosshair-vertical-before"></i>
             <i class="crosshair-line crosshair-vertical-after"></i>
             <i class="crosshair-pickbox"></i>
+          </div>
+          <div class="dynamic-input" id="dynamicInput" aria-hidden="true" hidden>
+            <div class="dynamic-input-prompt" id="dynamicInputPrompt"></div>
+            <div class="dynamic-input-values">
+              <span id="dynamicInputCoordinates"></span>
+              <span id="dynamicInputMeasure"></span>
+            </div>
+            <input id="dynamicInputEntry" autocomplete="off" placeholder="${t("dynamic_input_placeholder")}" aria-label="${t("dynamic_input")} · ${t("dynamic_input_placeholder")}" />
           </div>
           <div class="ucs-indicator" id="canvasCoords" title="World Coordinate System" aria-label="World Coordinate System">
             <svg viewBox="-32 -11 80 80" aria-hidden="true">
@@ -517,11 +551,11 @@ function renderShell() {
         </section>
       </aside>
     </main>
-    <div class="commandbar-splitter" id="commandbarSplitter" role="separator" aria-label="Resize command line" aria-orientation="horizontal" aria-valuemin="56" aria-valuemax="260" aria-valuenow="${commandbarHeight}" tabindex="0"></div>
-    <section class="commandbar" style="--commandbar-height: ${commandbarHeight}px">
+    <div class="commandbar-splitter" id="commandbarSplitter" role="separator" aria-label="Resize command line" aria-orientation="horizontal" aria-valuemin="56" aria-valuemax="260" aria-valuenow="${commandbarHeight}" tabindex="0" ${commandbarVisible ? "" : "hidden"}></div>
+    <section class="commandbar" style="--commandbar-height: ${commandbarHeight}px" ${commandbarVisible ? "" : "hidden"}>
       <div class="command-history" id="commandHistory" aria-live="polite"></div>
       <div class="command-entry">
-        <div class="prompt-mark">Command:</div>
+        <div class="prompt-mark">${t("command_line")}:</div>
         <input id="commandInput" autocomplete="off" placeholder="${t('cmd_placeholder')}" />
         <button class="command-send" id="commandSend" title="Execute command">↵</button>
       </div>
@@ -537,6 +571,7 @@ function renderShell() {
         <button id="toggleGridBtn" class="status-toggle active" title="Toggle Grid" aria-label="${t("grid_btn")}" aria-pressed="true"><span class="tool-icon" aria-hidden="true"></span><span>GRID</span></button>
         <button id="toggleSnapBtn" class="status-toggle active" title="Toggle Object Snap (F3)" aria-label="${t("snap_btn")}" aria-pressed="true"><span class="tool-icon" aria-hidden="true"></span><span>OSNAP</span></button>
         <button id="toggleOrthoBtn" class="status-toggle" title="Toggle Ortho Mode (F8)" aria-label="${t("ortho_btn")}" aria-pressed="false"><span class="tool-icon" aria-hidden="true"></span><span>ORTHO</span></button>
+        <button id="toggleDynamicInputBtn" class="status-toggle ${dynamicInputEnabled ? "active" : ""}" title="${t("dynamic_input")} (F12)" aria-label="${t("dynamic_input")} (F12)" aria-pressed="${dynamicInputEnabled}"><span aria-hidden="true">DYN</span></button>
         <span class="zoom-readout" id="zoomReadout">100%</span>
         <button class="user-icon" title="Engineer Thanh Phuong">P</button>
       </div>
@@ -628,9 +663,33 @@ function bindShellEvents() {
   const canvasEl = $("#cadCanvas");
   const viewportEl = $("#viewport");
   const crosshairEl = $("#cadCrosshair");
+  const dynamicInputPanel = $("#dynamicInput");
+  const dynamicInputEntry = $("#dynamicInputEntry");
+
+  dynamicInputPanel?.addEventListener("pointerdown", (event) => event.stopPropagation());
+  dynamicInputEntry?.addEventListener("keydown", (event) => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (!["Enter", "Escape", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat && (event.key === "Enter" || event.key === "Escape")) return;
+
+    const commandInput = $("#commandInput");
+    if (!commandInput) return;
+    commandInput.value = dynamicInputEntry.value;
+    if (event.key === "Enter" || event.key === "Escape") {
+      if (event.key === "Escape") commandInput.value = "";
+      commandInput.dispatchEvent(new KeyboardEvent("keydown", { key: event.key, bubbles: true }));
+      dynamicInputEntry.value = "";
+    } else {
+      commandInput.dispatchEvent(new KeyboardEvent("keydown", { key: event.key, bubbles: true }));
+      dynamicInputEntry.value = commandInput.value;
+    }
+  });
 
   viewportEl?.addEventListener("pointermove", (event) => {
     if (!crosshairEl || event.pointerType === "touch") return;
+    cursorViewportPosition = { x: event.clientX, y: event.clientY };
     const bounds = viewportEl.getBoundingClientRect();
     crosshairEl.style.setProperty("--crosshair-x", `${event.clientX - bounds.left}px`);
     crosshairEl.style.setProperty("--crosshair-y", `${event.clientY - bounds.top}px`);
@@ -638,8 +697,10 @@ function bindShellEvents() {
     viewportEl.classList.add("crosshair-active");
   });
   viewportEl?.addEventListener("pointerleave", () => {
+    cursorViewportPosition = null;
     if (crosshairEl) crosshairEl.hidden = true;
     viewportEl.classList.remove("crosshair-active");
+    updateDynamicInput();
   });
 
   $("#langToggleBtn").onclick = () => {
@@ -771,10 +832,11 @@ function bindShellEvents() {
     }
   });
   menuAction("menuExit", () => $("#closeBtn").click());
+  menuAction("menuToggleCommandLine", () => setCommandbarVisible(!commandbarVisible));
   menuAction("menuToggleProperties", () => setPaletteVisibility("properties", !paletteVisibility.properties));
   menuAction("menuToggleLayers", () => setPaletteVisibility("layers", !paletteVisibility.layers));
   menuAction("menuKeyboardHelp", () => {
-    setStatus(currentLang === "vi" ? "L: LINE · PL: PLINE · C: CIRCLE · E: ERASE · Ctrl+S: SAVE · F3: OSNAP · F8: ORTHO" : "L: LINE · PL: PLINE · C: CIRCLE · E: ERASE · Ctrl+S: SAVE · F3: OSNAP · F8: ORTHO");
+    setStatus("L: LINE · PL: PLINE · C: CIRCLE · E: ERASE · Ctrl+S: SAVE · Ctrl+9: COMMAND LINE · F3: OSNAP · F8: ORTHO · F12: DYNAMIC INPUT");
     $("#commandInput")?.focus();
   });
   menuAction("menuHelp", () => setStatus(currentLang === "vi" ? "Trợ giúp: nhập lệnh ở dòng lệnh phía dưới hoặc chọn công cụ trên ribbon." : "Help: enter commands on the command line or choose a tool from the ribbon."));
@@ -813,6 +875,7 @@ function bindShellEvents() {
   $("#toggleGridBtn").onclick = toggleGrid;
   $("#toggleSnapBtn").onclick = toggleSnap;
   $("#toggleOrthoBtn").onclick = toggleOrtho;
+  $("#toggleDynamicInputBtn").onclick = toggleDynamicInput;
   $("#navZoomExtents").onclick = zoomToExtents;
   $("#navZoomIn").onclick = () => { zoom *= 1.25; draw(); };
   $("#navZoomOut").onclick = () => { zoom /= 1.25; draw(); };
@@ -824,9 +887,11 @@ function bindShellEvents() {
     }, { passive: false });
   }
   navControls.addEventListener("pointerenter", () => {
+    cursorViewportPosition = null;
     crosshairEl.hidden = true;
     viewportEl.classList.remove("crosshair-active");
     currentSnap = null;
+    updateDynamicInput();
     draw();
   });
   bindViewCube($("#viewCube"), {
@@ -842,9 +907,11 @@ function bindShellEvents() {
       else { zoom = 1; pan = { x: 0, y: 0 }; draw(); }
     },
     onEnter: () => {
+      cursorViewportPosition = null;
       crosshairEl.hidden = true;
       viewportEl.classList.remove("crosshair-active");
       currentSnap = null;
+      updateDynamicInput();
       draw();
     },
   });
@@ -1345,11 +1412,58 @@ function generateRevisionCloud(corners, arcLength = 22) {
 const setStatus = (s) => {
   const el = $("#status");
   if (el) el.textContent = s;
+  updateDynamicInput();
 };
 
-function logCommand(text, kind = "prompt") {
+function setCommandbarVisible(visible) {
+  commandbarVisible = Boolean(visible);
+  try {
+    localStorage.setItem("concostcad_commandbar_visible", String(commandbarVisible));
+  } catch (_) {
+    // The current session still applies the preference if persistence is unavailable.
+  }
+  const commandbar = $(".commandbar");
+  const splitter = $("#commandbarSplitter");
+  commandbar?.toggleAttribute("hidden", !commandbarVisible);
+  splitter?.toggleAttribute("hidden", !commandbarVisible);
+  const menuButton = $("#menuToggleCommandLine");
+  menuButton?.classList.toggle("checked", commandbarVisible);
+  const menuCheck = menuButton?.querySelector(".menu-check");
+  if (menuCheck) menuCheck.textContent = commandbarVisible ? "✓" : "";
+  const ribbonButton = $("#ribbonToggleCommandLine");
+  ribbonButton?.classList.toggle("selected", commandbarVisible);
+  ribbonButton?.setAttribute("aria-pressed", String(commandbarVisible));
+  if (!commandbarVisible && commandbar?.contains(document.activeElement)) {
+    $("#viewport")?.focus({ preventScroll: true });
+  } else if (commandbarVisible && !showStartScreen) {
+    $("#commandInput")?.focus({ preventScroll: true });
+  }
+}
+
+function toggleDynamicInput() {
+  dynamicInputEnabled = !dynamicInputEnabled;
+  try {
+    localStorage.setItem("concostcad_dynamic_input", String(dynamicInputEnabled));
+  } catch (_) {
+    // Keep the setting for this session if storage is unavailable.
+  }
+  const button = $("#toggleDynamicInputBtn");
+  button?.classList.toggle("active", dynamicInputEnabled);
+  button?.setAttribute("aria-pressed", String(dynamicInputEnabled));
+  const ribbonButton = $("#ribbonToggleDynamicInput");
+  ribbonButton?.classList.toggle("selected", dynamicInputEnabled);
+  ribbonButton?.setAttribute("aria-pressed", String(dynamicInputEnabled));
+  const panel = $("#dynamicInput");
+  if (!dynamicInputEnabled && panel?.contains(document.activeElement)) {
+    if (commandbarVisible) $("#commandInput")?.focus({ preventScroll: true });
+    else $("#viewport")?.focus({ preventScroll: true });
+  }
+  updateDynamicInput();
+}
+
+function logCommand(text, kind = "prompt", command = null) {
   if (!text) return;
-  commandLog.push({ text, kind });
+  commandLog.push({ text, kind, ...(command ? { command } : {}) });
   if (commandLog.length > 80) commandLog.shift();
   renderCommandLog();
 }
@@ -1357,9 +1471,57 @@ function logCommand(text, kind = "prompt") {
 function renderCommandLog() {
   const history = $("#commandHistory");
   if (history) {
-    history.innerHTML = commandLog.slice(-5).map((entry) => `<div class="command-line ${entry.kind}">${escapeHtml(entry.text)}</div>`).join("");
+    history.innerHTML = commandLog.map((entry) => entry.command
+      ? `<button type="button" class="command-line ${entry.kind}" data-command="${escapeHtml(entry.command)}" title="Recall: ${escapeHtml(entry.command)}" aria-label="Recall command ${escapeHtml(entry.command)}">${escapeHtml(entry.text)}</button>`
+      : `<div class="command-line ${entry.kind}">${escapeHtml(entry.text)}</div>`).join("");
     history.scrollTop = history.scrollHeight;
   }
+}
+
+function updateDynamicInput() {
+  const panel = $("#dynamicInput");
+  if (!panel) return;
+  const visible = dynamicInputEnabled && !showStartScreen && activeTool !== "select" && cursorViewportPosition;
+  panel.hidden = !visible;
+  panel.setAttribute("aria-hidden", String(!visible));
+  if (!visible) return;
+
+  const viewport = $("#viewport");
+  const bounds = viewport?.getBoundingClientRect();
+  if (!bounds) return;
+  const prompt = $("#dynamicInputPrompt");
+  const coordinates = $("#dynamicInputCoordinates");
+  const measure = $("#dynamicInputMeasure");
+  if (prompt) prompt.textContent = $("#status")?.textContent || activeTool.toUpperCase();
+  if (coordinates) coordinates.textContent = `X ${world.x.toFixed(3)}   Y ${world.y.toFixed(3)}`;
+
+  const anchor = points.length ? points[points.length - 1] : moveBasePoint;
+  if (measure) {
+    if (anchor && Number.isFinite(anchor.x) && Number.isFinite(anchor.y)) {
+      const dx = world.x - anchor.x;
+      const dy = world.y - anchor.y;
+      const distance = Math.hypot(dx, dy);
+      if (activeTool === "circle") {
+        measure.textContent = `R ${distance.toFixed(3)}`;
+      } else if (activeTool === "rectangle") {
+        measure.textContent = `ΔX ${dx.toFixed(3)}   ΔY ${dy.toFixed(3)}`;
+      } else {
+        const angle = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+        measure.textContent = `L ${distance.toFixed(3)}   ∠ ${angle.toFixed(1)}°`;
+      }
+    } else {
+      measure.textContent = "";
+    }
+  }
+
+  const left = cursorViewportPosition.x - bounds.left;
+  const top = cursorViewportPosition.y - bounds.top;
+  const panelWidth = panel.offsetWidth || 280;
+  const panelHeight = panel.offsetHeight || 54;
+  const maxLeft = Math.max(8, bounds.width - panelWidth - 8);
+  const maxTop = Math.max(8, bounds.height - panelHeight - 8);
+  panel.style.left = `${Math.max(8, Math.min(maxLeft, left + 18))}px`;
+  panel.style.top = `${Math.max(8, Math.min(maxTop, top + 18))}px`;
 }
 
 // Coordinate Transforms
@@ -2312,6 +2474,7 @@ function draw() {
   if (zoomEl) zoomEl.textContent = `${Math.round(zoom * 100)}%`;
   const spaceLabel = $("#canvasSpaceLabel");
   if (spaceLabel) spaceLabel.textContent = activeSpace === "model" ? "WCS" : activeSpace.toUpperCase();
+  updateDynamicInput();
 }
 
 // Zoom Selected Entities (ZS / ZOOM OBJECT)
@@ -2520,6 +2683,13 @@ function renderRibbon() {
       </div>
       <div class="ribbon-group">
         <div class="tools">
+          <button class="tool-button compact ${dynamicInputEnabled ? 'selected' : ''}" id="ribbonToggleDynamicInput" aria-pressed="${dynamicInputEnabled}" title="${t("dynamic_input")} (F12)"><span class="tool-icon">DYN</span><span>${t("dynamic_input")}</span></button>
+          <button class="tool-button compact ${commandbarVisible ? 'selected' : ''}" id="ribbonToggleCommandLine" aria-pressed="${commandbarVisible}" title="${t("command_line")} (Ctrl+9)"><span class="tool-icon">⌨</span><span>${t("command_line")}</span></button>
+        </div>
+        <div class="group-caption">${currentLang === "vi" ? "NHẬP LỆNH" : "COMMAND INPUT"}</div>
+      </div>
+      <div class="ribbon-group">
+        <div class="tools">
           <button class="tool-button compact ${paletteVisibility.properties ? 'selected' : ''}" id="showPropertiesPanel" aria-pressed="${paletteVisibility.properties}" title="Toggle Properties palette"><span class="tool-icon">▤</span><span>Properties</span></button>
           <button class="tool-button compact ${paletteVisibility.layers ? 'selected' : ''}" id="showLayersPanel" aria-pressed="${paletteVisibility.layers}" title="Toggle Layers palette"><span class="tool-icon">▧</span><span>Layers</span></button>
         </div>
@@ -2656,6 +2826,10 @@ function bindRibbonEvents() {
 
   const ribbonToggleOrtho = $("#ribbonToggleOrtho");
   if (ribbonToggleOrtho) ribbonToggleOrtho.onclick = toggleOrtho;
+  const ribbonToggleDynamicInput = $("#ribbonToggleDynamicInput");
+  if (ribbonToggleDynamicInput) ribbonToggleDynamicInput.onclick = toggleDynamicInput;
+  const ribbonToggleCommandLine = $("#ribbonToggleCommandLine");
+  if (ribbonToggleCommandLine) ribbonToggleCommandLine.onclick = () => setCommandbarVisible(!commandbarVisible);
 
   const showPropertiesPanel = $("#showPropertiesPanel");
   if (showPropertiesPanel) showPropertiesPanel.onclick = () => setPaletteVisibility("properties", !paletteVisibility.properties);
@@ -2713,6 +2887,9 @@ async function sync(promise) {
 function chooseTool(tool) {
   if (tool !== "select") lastTool = tool;
   activeTool = tool;
+  if (tool === "select" && $("#dynamicInput")?.contains(document.activeElement)) {
+    $("#viewport")?.focus({ preventScroll: true });
+  }
   points = [];
   moveBasePoint = null;
 
@@ -3933,6 +4110,7 @@ function calculatePolygonArea(pts) {
 
 // Command Bar and Keyboard handling
 function cancelCurrentCommand() {
+  const hadActiveCommand = activeTool !== "select" || points.length > 0 || moveBasePoint !== null || activeGrip !== null;
   points = [];
   moveBasePoint = null;
   activeGrip = null;
@@ -3944,6 +4122,9 @@ function cancelCurrentCommand() {
   isPanning = false;
   lastPan = null;
   chooseTool("select");
+  if (hadActiveCommand) {
+    logCommand(currentLang === "vi" ? "Đã hủy lệnh" : "Command cancelled", "cancelled");
+  }
   setStatus(currentLang === "vi" ? "Đã hủy lệnh" : "Cancelled");
 }
 
@@ -3962,6 +4143,8 @@ function handleGlobalKeyDown(event) {
     cancel: cancelCurrentCommand,
     snap: toggleSnap,
     ortho: toggleOrtho,
+    toggleDynamicInput,
+    toggleCommandBar: () => setCommandbarVisible(!commandbarVisible),
     accept: acceptCurrentCommand,
   };
   void actions[action]();
@@ -3969,6 +4152,16 @@ function handleGlobalKeyDown(event) {
 
 function bindCommandBarEvents() {
   const cmdInput = $("#commandInput");
+  const historyPanel = $("#commandHistory");
+  historyPanel?.addEventListener("click", (event) => {
+    const row = event.target.closest(".command-line[data-command]");
+    if (!row || !cmdInput) return;
+    cmdInput.value = row.dataset.command;
+    historyIndex = -1;
+    commandDraft = "";
+    cmdInput.focus({ preventScroll: true });
+    cmdInput.setSelectionRange(cmdInput.value.length, cmdInput.value.length);
+  });
   if (cmdInput) {
     cmdInput.addEventListener("keydown", async (e) => {
       if (e.isComposing || e.keyCode === 229) return;
@@ -3981,7 +4174,10 @@ function bindCommandBarEvents() {
       if (e.key === "ArrowUp") {
         e.preventDefault();
         if (commandHistory.length > 0) {
-          if (historyIndex === -1) historyIndex = commandHistory.length - 1;
+          if (historyIndex === -1) {
+            commandDraft = cmdInput.value;
+            historyIndex = commandHistory.length - 1;
+          }
           else if (historyIndex > 0) historyIndex--;
           cmdInput.value = commandHistory[historyIndex];
         }
@@ -3994,7 +4190,8 @@ function bindCommandBarEvents() {
             cmdInput.value = commandHistory[historyIndex];
           } else {
             historyIndex = -1;
-            cmdInput.value = "";
+            cmdInput.value = commandDraft;
+            commandDraft = "";
           }
         }
       }
@@ -4003,9 +4200,11 @@ function bindCommandBarEvents() {
         const raw = e.currentTarget.value.trim();
         if (raw) {
           commandHistory.push(raw);
-          logCommand(`> ${raw}`, "input");
           if (commandHistory.length > 50) commandHistory.shift();
+          persistCommandHistory();
+          logCommand(`> ${raw}`, "input", raw);
           historyIndex = -1;
+          commandDraft = "";
         }
         e.currentTarget.value = "";
         if (!raw) {
@@ -4013,67 +4212,81 @@ function bindCommandBarEvents() {
           return;
         }
 
-        const cmd = raw.toUpperCase();
-        if (activeTool === "polyline" && (cmd === "U" || cmd === "UNDO") && undoPolylineVertex()) return;
-        if (activeTool === "polyline" && (cmd === "C" || cmd === "CLOSE")) { finishPolyline(true); return; }
+        const cmd = normalizeCommand(raw, activeTool);
+        if (cmd === "PLINE_UNDO") {
+          if (!undoPolylineVertex()) setStatus(currentLang === "vi" ? "PLINE chưa có đỉnh để Undo" : "PLINE has no vertex to undo");
+          return;
+        }
+        if (cmd === "PLINE_CLOSE") { await finishPolyline(true); return; }
         if (cmd === "START") { showStartTab(); return; }
-        if (cmd === "NEW" || cmd === "QNEW") { $("#newBtn")?.click(); return; }
+        if (cmd === "NEW") { $("#newBtn")?.click(); return; }
         if (cmd === "OPEN") { openDrawing(); return; }
-        if (cmd === "SAVE" || cmd === "QSAVE") { saveDrawing(); return; }
-        if (cmd === "CLOSE" || cmd === "CLOSEDFILE") { closeCurrentDrawing(); return; }
-        if (cmd === "QUIT" || cmd === "EXIT") { appWindowRef?.close(); return; }
-        if (cmd === "ZE" || cmd === "ZOOM EXTENTS") { zoomToExtents(); return; }
-    if (cmd === "ZS" || cmd === "ZOOM SELECTED" || cmd === "ZOOM OBJECT") { zoomSelected(); return; }
-    if (cmd === "EXPORT" || cmd === "PLOT" || cmd === "PRINT") { exportDrawingImage(); return; }
-    if (cmd === "TAKEOFF" || cmd === "BOM" || cmd === "COUNT" || cmd === "QUANTITY") {
-      showTakeoffModal();
-      return;
-    }
-    if (cmd === "MODEL" || cmd === "MS") {
-      const b = $("button[data-space='model']");
-      if (b) b.click();
-      return;
-    }
-    if (cmd === "LAYOUT" || cmd === "PS" || cmd === "PAPER") {
-      const b = $("button[data-space='layout1']");
-      if (b) b.click();
-      return;
-    }
-    if (cmd === "SPLINE" || cmd === "SPL") { chooseTool("spline"); return; }
-    if (cmd === "REVCLOUD" || cmd === "CLOUD") { chooseTool("revcloud"); return; }
-    if (cmd === "HATCH" || cmd === "H") { chooseTool("hatch"); return; }
-    if (cmd === "PRECISION" || cmd === "DIMSTYLE" || cmd === "UNITS") {
-      dimPrecision = (dimPrecision + 1) % 4; // Cycles: 0, 1, 2, 3 decimals
-      setStatus(`Độ chính xác kích thước: ${dimPrecision} chữ số thập phân (DIMSTYLE)`);
-      return;
-    }
-        if (cmd === "U" || cmd === "UNDO") { undoAction(); return; }
+        if (cmd === "SAVE") { saveDrawing(); return; }
+        if (cmd === "CLOSE") { closeCurrentDrawing(); return; }
+        if (cmd === "EXIT") { appWindowRef?.close(); return; }
+        if (cmd === "ZOOM_EXTENTS") { zoomToExtents(); return; }
+        if (cmd === "ZOOM_SELECTED") { zoomSelected(); return; }
+        if (cmd === "EXPORT") { exportDrawingImage(); return; }
+        if (cmd === "TAKEOFF") {
+          showTakeoffModal();
+          return;
+        }
+        if (cmd === "MODEL") {
+          const b = $("button[data-space='model']");
+          if (b) b.click();
+          return;
+        }
+        if (cmd === "LAYOUT") {
+          const b = $("button[data-space='layout1']");
+          if (b) b.click();
+          return;
+        }
+        if (cmd === "SPLINE") { chooseTool("spline"); return; }
+        if (cmd === "REVCLOUD") { chooseTool("revcloud"); return; }
+        if (cmd === "HATCH") { chooseTool("hatch"); return; }
+        if (cmd === "PRECISION") {
+          dimPrecision = (dimPrecision + 1) % 4; // Cycles: 0, 1, 2, 3 decimals
+          setStatus(currentLang === "vi"
+            ? `Độ chính xác kích thước: ${dimPrecision} chữ số thập phân (DIMSTYLE)`
+            : `Dimension precision: ${dimPrecision} decimal places (DIMSTYLE)`);
+          return;
+        }
+        if (cmd === "UNDO") { undoAction(); return; }
         if (cmd === "REDO") { redoAction(); return; }
-        if (cmd === "E" || cmd === "ERASE" || cmd === "DELETE") { eraseSelected(); return; }
-        if (cmd === "M" || cmd === "MOVE") { chooseTool("move"); return; }
-        if (cmd === "CO" || cmd === "CP" || cmd === "COPY") { chooseTool("copy"); return; }
-        if (cmd === "RO" || cmd === "ROTATE") { chooseTool("rotate"); return; }
-        if (cmd === "MI" || cmd === "MIRROR") { chooseTool("mirror"); return; }
-        if (cmd === "L" || cmd === "LINE") { chooseTool("line"); return; }
-        if (cmd === "A" || cmd === "ARC") { chooseTool("arc"); return; }
-        if (cmd === "PL" || cmd === "PLINE" || cmd === "POLYLINE") { chooseTool("polyline"); return; }
+        if (cmd === "ERASE") { eraseSelected(); return; }
+        if (cmd === "MOVE") { chooseTool("move"); return; }
+        if (cmd === "COPY") { chooseTool("copy"); return; }
+        if (cmd === "ROTATE") { chooseTool("rotate"); return; }
+        if (cmd === "MIRROR") { chooseTool("mirror"); return; }
+        if (cmd === "LINE") { chooseTool("line"); return; }
+        if (cmd === "ARC") { chooseTool("arc"); return; }
+        if (cmd === "PLINE") { chooseTool("polyline"); return; }
         if (cmd === "C" || cmd === "CIRCLE") { chooseTool("circle"); return; }
-        if (cmd === "REC" || cmd === "RECT" || cmd === "RECTANGLE") { chooseTool("rectangle"); return; }
-        if (cmd === "X" || cmd === "EXPLODE") { explodeSelected(); return; }
-        if (cmd.startsWith("O ") || cmd.startsWith("OFFSET ")) {
-          const parts = raw.split(/\s+/);
+        if (cmd === "RECTANGLE") { chooseTool("rectangle"); return; }
+        if (cmd === "EXPLODE") { explodeSelected(); return; }
+        if (cmd.startsWith("OFFSET ")) {
+          const parts = cmd.split(/\s+/);
           if (parts[1] && !isNaN(Number(parts[1]))) offsetDist = Number(parts[1]);
           chooseTool("offset");
           return;
         }
-        if (cmd === "O" || cmd === "OFFSET") { chooseTool("offset"); return; }
-                if (cmd === "DLI" || cmd === "DIM" || cmd === "DIMLINEAR" || cmd === "DAL") { chooseTool("dim"); return; }
-        if (cmd === "DIST" || cmd === "DI" || cmd === "MEASURE") { chooseTool("dist"); return; }
-        if (cmd === "AREA" || cmd === "AA") { chooseTool("area"); return; }
+        if (cmd === "OFFSET") { chooseTool("offset"); return; }
+        if (cmd === "DIM") { chooseTool("dim"); return; }
+        if (cmd === "DIST") { chooseTool("dist"); return; }
+        if (cmd === "AREA") { chooseTool("area"); return; }
         if (cmd === "GRID") { toggleGrid(); return; }
         if (cmd === "ORTHO") { toggleOrtho(); return; }
         if (cmd === "SNAP") { toggleSnap(); return; }
-        if (cmd === "J" || cmd === "JOIN") {
+        if (cmd === "DYNAMIC_INPUT") { toggleDynamicInput(); return; }
+        if (cmd === "COMMAND_LINE") { setCommandbarVisible(!commandbarVisible); return; }
+        if (cmd === "CANCEL") { cancelCurrentCommand(); return; }
+        if (cmd === "HELP") {
+          setStatus(currentLang === "vi"
+            ? "Nhập alias hoặc tên lệnh; ↑/↓ xem lịch sử; Esc hủy; F12 bật Nhập động; Ctrl+9 bật/tắt Dòng lệnh."
+            : "Enter a command or alias; ↑/↓ browse history; Esc cancels; F12 toggles Dynamic Input; Ctrl+9 toggles Command Line.");
+          return;
+        }
+        if (cmd === "JOIN") {
           if (selectedHandles.size >= 2) {
             await sync(invoke("join_entities", { handles: Array.from(selectedHandles) }));
             setStatus(currentLang === "vi" ? "Đã nối các đối tượng (JOIN)" : "Entities joined");
@@ -4083,11 +4296,11 @@ function bindCommandBarEvents() {
           }
           return;
         }
-        if (cmd === "F" || cmd === "FILLET") { chooseTool("fillet"); return; }
-        if (cmd === "CHA" || cmd === "CHAMFER") { chooseTool("chamfer"); return; }
-        if (cmd === "TR" || cmd === "TRIM") { chooseTool("trim"); return; }
-        if (cmd === "EX" || cmd === "EXTEND") { chooseTool("extend"); return; }
-        if (cmd === "DT" || cmd === "TEXT" || cmd === "MTEXT") { chooseTool("text"); return; }
+        if (cmd === "FILLET") { chooseTool("fillet"); return; }
+        if (cmd === "CHAMFER") { chooseTool("chamfer"); return; }
+        if (cmd === "TRIM") { chooseTool("trim"); return; }
+        if (cmd === "EXTEND") { chooseTool("extend"); return; }
+        if (cmd === "TEXT") { chooseTool("text"); return; }
 
         // Angle input for Rotate
         if (activeTool === "rotate" && moveBasePoint && !isNaN(Number(raw))) {
@@ -4097,6 +4310,25 @@ function bindCommandBarEvents() {
           chooseTool("select");
           setStatus(`Rotated by ${ang}°`);
           return;
+        }
+
+        const numericValue = Number(raw);
+        if (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(raw) && Number.isFinite(numericValue)) {
+          if (activeTool === "circle" && points.length === 1 && numericValue > 0) {
+            const center = points[0];
+            if (await sync(invoke("add_circle", { cx: center.x, cy: center.y, radius: numericValue }))) {
+              points = [];
+              setStatus(currentLang === "vi" ? "Đã tạo đường tròn (CIRCLE)" : "CIRCLE created");
+            }
+            draw();
+            return;
+          }
+          if ((activeTool === "line" || activeTool === "polyline") && points.length > 0 && numericValue > 0) {
+            const anchor = points[points.length - 1];
+            const angle = Math.atan2(world.y - anchor.y, world.x - anchor.x);
+            handleCoordinateInput({ x: anchor.x + numericValue * Math.cos(angle), y: anchor.y + numericValue * Math.sin(angle) });
+            return;
+          }
         }
 
         // Relative Polar: @dist<angle
@@ -4133,10 +4365,14 @@ function bindCommandBarEvents() {
           return;
         }
 
-        setStatus(`Unknown command: ${raw}`);
+        const message = currentLang === "vi" ? `Không rõ lệnh: ${raw}` : `Unknown command: ${raw}`;
+        logCommand(message, "error");
+        setStatus(message);
       }
       if (e.key === "Escape") {
         e.currentTarget.value = "";
+        historyIndex = -1;
+        commandDraft = "";
         cancelCurrentCommand();
       }
     });
@@ -4163,6 +4399,39 @@ async function handleCoordinateInput(p) {
   } else if (activeTool === "polyline") {
     points.push({ ...p, bulge: 0 });
     setStatus(`PLINE · ${points.length} vertices; Specify next point or [Undo/Close]`);
+  } else if (activeTool === "circle") {
+    points.push(p);
+    if (points.length === 1) {
+      setStatus(currentLang === "vi" ? "CIRCLE · Nhập bán kính hoặc tọa độ điểm bán kính" : "CIRCLE · Enter radius or radius-point coordinates");
+    } else {
+      const center = points[0];
+      const radius = Math.hypot(p.x - center.x, p.y - center.y);
+      if (radius > 1e-6 && await sync(invoke("add_circle", { cx: center.x, cy: center.y, radius }))) {
+        points = [];
+        setStatus(currentLang === "vi" ? "Đã tạo đường tròn (CIRCLE)" : "CIRCLE created");
+      } else {
+        points = [center];
+      }
+    }
+  } else if (activeTool === "rectangle") {
+    points.push(p);
+    if (points.length === 1) {
+      setStatus(currentLang === "vi" ? "RECTANGLE · Chọn hoặc nhập góc đối diện" : "RECTANGLE · Pick or enter the opposite corner");
+    } else {
+      const [first, opposite] = points;
+      const rectPoints = [
+        [first.x, first.y, 0],
+        [opposite.x, first.y, 0],
+        [opposite.x, opposite.y, 0],
+        [first.x, opposite.y, 0]
+      ];
+      if (await sync(invoke("add_polyline", { points: rectPoints, closed: true }))) {
+        points = [];
+        setStatus(currentLang === "vi" ? "Đã tạo hình chữ nhật" : "RECTANGLE created");
+      } else {
+        points = [first];
+      }
+    }
   } else if (activeTool === "arc") {
     points.push(p);
     if (points.length === 3) {

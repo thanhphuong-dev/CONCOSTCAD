@@ -1336,6 +1336,67 @@ button {
   display: none;
 }
 
+.dynamic-input {
+  position: absolute;
+  z-index: 9;
+  display: grid;
+  gap: 4px;
+  max-width: min(360px, calc(100% - 16px));
+  padding: 6px 8px;
+  border: 1px solid #5b7b91;
+  border-radius: 3px;
+  background: rgba(20, 29, 38, 0.96);
+  box-shadow: 0 2px 8px #0008;
+  color: #e6edf3;
+  pointer-events: none;
+  font: 10px/1.35 "Segoe UI", Arial, sans-serif;
+}
+
+.dynamic-input[hidden] {
+  display: none;
+}
+
+.dynamic-input-prompt {
+  max-width: 344px;
+  overflow: hidden;
+  color: #b5d9ec;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dynamic-input-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: #fff;
+  font: 10px/1.35 Consolas, "Cascadia Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.dynamic-input input {
+  width: 220px;
+  max-width: 100%;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid #526474;
+  border-radius: 2px;
+  background: #111820;
+  color: #f0f4f7;
+  outline: none;
+  pointer-events: auto;
+  font: 10px Consolas, "Cascadia Mono", monospace;
+}
+
+.dynamic-input input:focus {
+  border-color: #59b6d3;
+  box-shadow: 0 0 0 1px #2a5a67;
+}
+
+.dynamic-input input::placeholder {
+  color: #8795a2;
+}
+
 .crosshair-line {
   position: absolute;
   display: block;
@@ -1977,6 +2038,11 @@ body.resizing-commandbar * {
   gap: 3px;
 }
 
+.commandbar[hidden],
+.commandbar-splitter[hidden] {
+  display: none !important;
+}
+
 .command-history {
   width: 100%;
   flex: 1;
@@ -2005,7 +2071,26 @@ body.resizing-commandbar * {
 }
 
 .command-line.input {
+  display: block;
+  width: 100%;
+  padding: 0;
   color: #d4d4d4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.command-line.input:hover,
+.command-line.input:focus-visible {
+  color: #fff;
+  background: #313e4b;
+}
+
+.command-line.cancelled {
+  color: #98a3ae;
+}
+
+.command-line.error {
+  color: #f28b82;
 }
 
 .command-entry {
@@ -2019,7 +2104,7 @@ body.resizing-commandbar * {
   color: #a9cbe0;
   font-size: 10px;
   font-weight: 600;
-  width: 54px;
+  width: 76px;
   flex: none;
 }
 
@@ -2701,6 +2786,11 @@ body.resizing-commandbar * {
   color: #8fe2f3;
 }
 
+#toggleDynamicInputBtn {
+  min-width: 34px;
+  font-weight: 700;
+}
+
 .status-sep {
   height: 13px;
   width: 1px;
@@ -3365,6 +3455,20 @@ body.resizing-commandbar * {
   color: #293c4f;
 }
 
+:root[data-theme="light"] .command-line.input:hover,
+:root[data-theme="light"] .command-line.input:focus-visible {
+  color: #173e58;
+  background: #dceaf3;
+}
+
+:root[data-theme="light"] .command-line.cancelled {
+  color: #6a7784;
+}
+
+:root[data-theme="light"] .command-line.error {
+  color: #a7322d;
+}
+
 :root[data-theme="light"] .prompt-mark {
   color: #35546b;
 }
@@ -3397,6 +3501,31 @@ body.resizing-commandbar * {
 :root[data-theme="light"] .status-toggle.active {
   color: #154866;
   background: #c6e1ef;
+}
+
+:root[data-theme="light"] .dynamic-input {
+  border-color: #6392ad;
+  background: rgba(246, 250, 253, 0.97);
+  color: #263b4c;
+  box-shadow: 0 2px 8px #1c344233;
+}
+
+:root[data-theme="light"] .dynamic-input-prompt {
+  color: #245b78;
+}
+
+:root[data-theme="light"] .dynamic-input-values {
+  color: #213444;
+}
+
+:root[data-theme="light"] .dynamic-input input {
+  border-color: #bdc8d4;
+  background: #fff;
+  color: #243546;
+}
+
+:root[data-theme="light"] .dynamic-input input::placeholder {
+  color: #788a9b;
 }
 
 :root[data-theme="light"] .start-screen {

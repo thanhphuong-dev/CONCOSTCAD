@@ -13,6 +13,7 @@ export function cadShortcut(event, editorActive) {
   if (event.ctrlKey || event.metaKey) {
     if (key === 'n') return 'new';
     if (key === 'o') return 'open';
+    if (key === '9' && !event.shiftKey) return 'toggleCommandBar';
     if (!editorActive) return null;
     if (key === 's') return event.shiftKey ? 'saveAs' : 'save';
     if (editable) return null;
@@ -21,6 +22,7 @@ export function cadShortcut(event, editorActive) {
     return null;
   }
   if (!editorActive) return null;
+  if (key === 'f12') return 'toggleDynamicInput';
   if (key === 'f3') return 'snap';
   if (key === 'f8') return 'ortho';
   if (editable) return null;
