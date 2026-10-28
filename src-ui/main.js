@@ -99,6 +99,9 @@ function applyToolbarIcons() {
 const supportedLanguages = ["en", "vi", "ko"];
 const savedLanguage = localStorage.getItem("concostcad_lang");
 let currentLang = supportedLanguages.includes(savedLanguage) ? savedLanguage : "en";
+const savedTheme = localStorage.getItem("concostcad_theme");
+let currentTheme = savedTheme === "light" ? "light" : "dark";
+document.documentElement.dataset.theme = currentTheme;
 
 const i18n = {
   vi: {
@@ -174,6 +177,8 @@ const i18n = {
     layer_lock: "KHÓA",
     cmd_placeholder: "Nhập lệnh (L, A, PL, C, REC, M, CO, RO, MI, E, U, REDO, DIST, AREA) hoặc tọa độ x,y",
     ready_status: "Sẵn sàng · Bản vẽ mới",
+    theme_to_light: "Chuyển sang giao diện sáng",
+    theme_to_dark: "Chuyển sang giao diện tối",
     grid_btn: "▦ LƯỚI",
     snap_btn: "⊕ BẮT ĐIỂM",
     ortho_btn: "∟ TRỰC GIAO",
@@ -251,6 +256,8 @@ const i18n = {
     layer_lock: "LOCK",
     cmd_placeholder: "Type a command (L, A, PL, C, REC, M, CO, RO, MI, E, U, REDO, DIST, AREA) or x,y",
     ready_status: "Ready · New drawing",
+    theme_to_light: "Switch to light theme",
+    theme_to_dark: "Switch to dark theme",
     grid_btn: "▦ GRID",
     snap_btn: "⊕ SNAP",
     ortho_btn: "∟ ORTHO",
@@ -270,6 +277,15 @@ function languageControlLabel() {
 function cycleLanguage(language) {
   const currentIndex = supportedLanguages.indexOf(language);
   return supportedLanguages[(currentIndex + 1 + supportedLanguages.length) % supportedLanguages.length];
+}
+
+function updateThemeControl() {
+  const button = $("#themeToggleBtn");
+  if (!button) return;
+  const label = t(currentTheme === "dark" ? "theme_to_light" : "theme_to_dark");
+  button.textContent = currentTheme === "dark" ? "☼" : "☾";
+  button.title = label;
+  button.setAttribute("aria-label", label);
 }
 
 function readQuickAccessVisibility() {
@@ -504,6 +520,7 @@ function renderShell() {
       </div>
       <div class="title-name" id="titleName" data-tauri-drag-region>${escapeHtml(shellTitle)}</div>
       <div class="title-spacer" data-tauri-drag-region></div>
+      <button class="title-action theme-toggle" id="themeToggleBtn" title="${t(currentTheme === "dark" ? "theme_to_light" : "theme_to_dark")}" aria-label="${t(currentTheme === "dark" ? "theme_to_light" : "theme_to_dark")}">${currentTheme === "dark" ? "☼" : "☾"}</button>
       <button class="title-action" id="langToggleBtn" style="height:22px; padding:0 8px; font-weight:700; color:#8fe2f3; background:#1b3846;" title="${languageControlLabel()}" aria-label="${languageControlLabel()}">${currentLang.toUpperCase()}</button>
       <div class="edition" data-tauri-drag-region>${t("brand_sub")}</div>
       <div class="window-controls">
@@ -795,6 +812,16 @@ function bindShellEvents() {
     renderShell();
     renderRibbon();
     render();
+  };
+  $("#themeToggleBtn").onclick = () => {
+    currentTheme = currentTheme === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = currentTheme;
+    try {
+      localStorage.setItem("concostcad_theme", currentTheme);
+    } catch (_) {
+      // The current session still applies the selected theme if persistence is unavailable.
+    }
+    updateThemeControl();
   };
 
   $$("#ribbonTabs .tab").forEach((tab) => {

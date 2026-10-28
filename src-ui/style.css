@@ -3088,3 +3088,403 @@ body.resizing-commandbar * {
 .takeoff-btn:hover {
   filter: brightness(1.15);
 }
+
+/* Light workspace theme. The drawing viewport stays dark for CAD layer contrast. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  color: #243140;
+  background: #edf1f5;
+  --bg: #edf1f5;
+  --panel: #ffffff;
+  --raised: #f5f7fa;
+  --edge: #c7d0da;
+  --muted: #5e6b79;
+  --accent: #087eae;
+  --accent-glow: #006d9e;
+  --cad-chrome-top: #e2e8ef;
+  --cad-chrome-tab: #d7dfe8;
+  --cad-chrome-ribbon: #f0f3f7;
+  --cad-chrome-edge: #c2ccd7;
+  --cad-chrome-hover: #d1dde9;
+  --cad-chrome-selected: #c4e1f1;
+}
+
+:root[data-theme="light"] body,
+:root[data-theme="light"] #app {
+  color: #243140;
+  background: #edf1f5;
+}
+
+:root[data-theme="light"] .titlebar,
+:root[data-theme="light"] .menubar,
+:root[data-theme="light"] .tabs,
+:root[data-theme="light"] .ribbon,
+:root[data-theme="light"] .drawing-tab,
+:root[data-theme="light"] .statusbar {
+  color: #243140;
+}
+
+:root[data-theme="light"] .titlebar,
+:root[data-theme="light"] .menubar,
+:root[data-theme="light"] .tabs,
+:root[data-theme="light"] .ribbon,
+:root[data-theme="light"] .statusbar {
+  border-color: #c7d0da;
+}
+
+:root[data-theme="light"] .titlebar .title-name,
+:root[data-theme="light"] .titlebar .edition,
+:root[data-theme="light"] .quick-access-button,
+:root[data-theme="light"] .quick-access-button .cad-icon,
+:root[data-theme="light"] .menu-trigger,
+:root[data-theme="light"] .tab,
+:root[data-theme="light"] .ribbon-collapse-toggle,
+:root[data-theme="light"] .tool-button,
+:root[data-theme="light"] .group-caption,
+:root[data-theme="light"] .space-label,
+:root[data-theme="light"] .statusbar {
+  color: #344354;
+}
+
+:root[data-theme="light"] .quick-access-button:hover,
+:root[data-theme="light"] .menu-trigger:hover,
+:root[data-theme="light"] .app-menu[open] > .menu-trigger,
+:root[data-theme="light"] .tab:hover,
+:root[data-theme="light"] .ribbon-collapse-toggle:hover,
+:root[data-theme="light"] .ribbon-collapse-toggle:focus-visible {
+  background: #d3e0ec;
+  color: #172b3d;
+}
+
+:root[data-theme="light"] .menu-popup,
+:root[data-theme="light"] .menubar .menu-popup,
+:root[data-theme="light"] .recent-actions-menu {
+  color: #263544;
+  background: #ffffff;
+  border-color: #c3ccd6;
+  box-shadow: 0 5px 16px #2030402b;
+}
+
+:root[data-theme="light"] .menu-popup button,
+:root[data-theme="light"] .menubar .menu-popup button,
+:root[data-theme="light"] .recent-actions-menu button {
+  color: #263544;
+}
+
+:root[data-theme="light"] .menu-popup button:hover,
+:root[data-theme="light"] .menubar .menu-popup button:hover:not(:disabled),
+:root[data-theme="light"] .recent-actions-menu button:hover {
+  color: #142a3d;
+  background: #dceaf5;
+}
+
+:root[data-theme="light"] .menu-separator,
+:root[data-theme="light"] .menubar .menu-separator,
+:root[data-theme="light"] .ribbon-group {
+  background-color: #d0d8e1;
+  border-color: #cbd4de;
+}
+
+:root[data-theme="light"] .tab.active {
+  color: #152c40;
+  background: #f8fafc;
+  box-shadow: inset 0 -2px 0 #1687b9;
+}
+
+:root[data-theme="light"] .ribbon .tool-button {
+  color: #344354;
+}
+
+:root[data-theme="light"] .ribbon .tool-button:hover,
+:root[data-theme="light"] .ribbon .tool-button.selected {
+  color: #15344b;
+  background: #d8e9f4;
+}
+
+:root[data-theme="light"] .ribbon .tool-button.selected {
+  box-shadow: inset 0 0 0 1px #9fc8df;
+}
+
+:root[data-theme="light"] .ribbon-select,
+:root[data-theme="light"] .ribbon .title-action,
+:root[data-theme="light"] .ribbon input:not([type="color"]) {
+  color: #263544;
+  background: #ffffff;
+  border-color: #bdc8d4;
+}
+
+:root[data-theme="light"] .ribbon-hint,
+:root[data-theme="light"] .ribbon-field-label {
+  color: #586878;
+}
+
+:root[data-theme="light"] .workspace,
+:root[data-theme="light"] .sidepanels {
+  background: #e9edf2;
+}
+
+:root[data-theme="light"] .drawing-tab {
+  background: #dce3eb;
+  border-color: #c7d0da;
+}
+
+:root[data-theme="light"] .drawing-tab-label {
+  color: #233446;
+  background: #eaf0f5;
+  border-color: #c7d0da;
+}
+
+:root[data-theme="light"] .doc-tab {
+  color: #4d5d6d;
+}
+
+:root[data-theme="light"] .doc-tab:hover {
+  color: #1e3042;
+  background: #e6edf4;
+}
+
+:root[data-theme="light"] .doc-tab.active {
+  color: #1d3347;
+  background: #ffffff;
+  border-bottom-color: #1687b9;
+}
+
+:root[data-theme="light"] .add-tab-btn,
+:root[data-theme="light"] .tab-tools,
+:root[data-theme="light"] .close-tab {
+  color: #5e6d7c;
+}
+
+:root[data-theme="light"] .layout-tab-bar {
+  background: #e1e7ee;
+  border-color: #c5ced8;
+}
+
+:root[data-theme="light"] .layout-tab {
+  color: #506070;
+}
+
+:root[data-theme="light"] .layout-tab.active {
+  color: #21394d;
+  background: #f9fbfd;
+  border-bottom-color: #1687b9;
+}
+
+:root[data-theme="light"] .layout-add-btn {
+  color: #536273;
+}
+
+:root[data-theme="light"] .panel {
+  color: #273646;
+  background: #ffffff;
+  border-color: #c6d0da;
+}
+
+:root[data-theme="light"] .panel-heading {
+  color: #2a3b4c;
+  background: #e7edf3;
+  border-color: #cbd4de;
+}
+
+:root[data-theme="light"] .panel-heading button,
+:root[data-theme="light"] .panel-grip,
+:root[data-theme="light"] .panel-kicker,
+:root[data-theme="light"] .layer-head,
+:root[data-theme="light"] .property-row {
+  color: #5b6a79;
+}
+
+:root[data-theme="light"] .property-row {
+  border-color: #e2e7ed;
+}
+
+:root[data-theme="light"] .property-row strong {
+  color: #243546;
+}
+
+:root[data-theme="light"] .prop-select,
+:root[data-theme="light"] .new-layer-input {
+  color: #263544;
+  background: #ffffff;
+  border-color: #bdc8d4;
+}
+
+:root[data-theme="light"] .prop-btn {
+  color: #344657;
+  background: #f2f5f8;
+  border-color: #c7d0da;
+}
+
+:root[data-theme="light"] .prop-btn:hover {
+  color: #1c3348;
+  background: #e1ebf4;
+}
+
+:root[data-theme="light"] .new-layer-box {
+  background: #f1f4f7;
+  border-color: #d6dde5;
+}
+
+:root[data-theme="light"] .new-layer-btn {
+  color: #15506a;
+  background: #d8edf7;
+}
+
+:root[data-theme="light"] .layer-row {
+  color: #384a5c;
+  border-color: #e1e6ec;
+}
+
+:root[data-theme="light"] .layer-row:hover {
+  background: #edf3f8;
+}
+
+:root[data-theme="light"] .layer-row.current {
+  color: #14516d;
+  background: #d9edf7;
+}
+
+:root[data-theme="light"] .palette-splitter,
+:root[data-theme="light"] .palette-width-splitter,
+:root[data-theme="light"] .commandbar-splitter {
+  background: #d4dce5;
+  border-color: #bdc8d4;
+}
+
+:root[data-theme="light"] .commandbar {
+  color: #334354;
+  background: #e4e9ef;
+  border-color: #c5ced8;
+}
+
+:root[data-theme="light"] .command-history {
+  color: #586878;
+}
+
+:root[data-theme="light"] .command-line.input {
+  color: #293c4f;
+}
+
+:root[data-theme="light"] .prompt-mark {
+  color: #35546b;
+}
+
+:root[data-theme="light"] .commandbar input {
+  color: #263544;
+  background: #ffffff;
+  border-color: #b8c4d0;
+}
+
+:root[data-theme="light"] .command-send {
+  color: #17516c;
+  background: #d2e7f2;
+}
+
+:root[data-theme="light"] .command-send:hover {
+  background: #c0deed;
+}
+
+:root[data-theme="light"] .statusbar {
+  color: #4d5d6d;
+  background: #d9e0e8;
+}
+
+:root[data-theme="light"] .status-toggle {
+  color: #4d5d6d;
+}
+
+:root[data-theme="light"] .status-toggle:hover,
+:root[data-theme="light"] .status-toggle.active {
+  color: #154866;
+  background: #c6e1ef;
+}
+
+:root[data-theme="light"] .start-screen {
+  color: #263544;
+  background: #f1f4f8;
+}
+
+:root[data-theme="light"] .start-sidebar {
+  background: #e4eaf1;
+}
+
+:root[data-theme="light"] .start-sidebar-brand small,
+:root[data-theme="light"] .start-sidebar-footer,
+:root[data-theme="light"] .start-nav-item,
+:root[data-theme="light"] .start-nav-item > span {
+  color: #5b6c7d;
+}
+
+:root[data-theme="light"] .start-sidebar-divider {
+  background: #cbd4de;
+}
+
+:root[data-theme="light"] .start-nav-item:hover,
+:root[data-theme="light"] .start-nav-item.active {
+  color: #20364a;
+  background: #d2e1ed;
+}
+
+:root[data-theme="light"] .start-main {
+  background: #f5f7fa;
+}
+
+:root[data-theme="light"] .start-main-heading h1,
+:root[data-theme="light"] .start-empty,
+:root[data-theme="light"] .start-empty strong,
+:root[data-theme="light"] .learn-card h2 {
+  color: #263544;
+}
+
+:root[data-theme="light"] .start-main-heading,
+:root[data-theme="light"] .learn-card {
+  border-color: #d2dae3;
+}
+
+:root[data-theme="light"] .start-main-heading p,
+:root[data-theme="light"] .start-empty > span:last-of-type,
+:root[data-theme="light"] .learn-card p {
+  color: #5c6b7a;
+}
+
+:root[data-theme="light"] .recent-view-toggle,
+:root[data-theme="light"] .recent-drawing,
+:root[data-theme="light"] .learn-card {
+  background: #e8edf3;
+}
+
+:root[data-theme="light"] .recent-view-toggle button,
+:root[data-theme="light"] .recent-meta small,
+:root[data-theme="light"] .recent-more {
+  color: #5b6a79;
+}
+
+:root[data-theme="light"] .recent-drawing:hover,
+:root[data-theme="light"] .learn-card:hover {
+  background: #e1ebf3;
+  border-color: #b6c9d9;
+}
+
+:root[data-theme="light"] .recent-meta strong {
+  color: #263544;
+}
+
+:root[data-theme="light"] .recent-actions-menu button,
+:root[data-theme="light"] .start-action,
+:root[data-theme="light"] .start-empty-actions button,
+:root[data-theme="light"] .learn-card button {
+  color: #2c4053;
+  background: #f8fafc;
+  border-color: #c5d0dc;
+}
+
+:root[data-theme="light"] .start-action:hover,
+:root[data-theme="light"] .start-empty-actions button:hover,
+:root[data-theme="light"] .learn-card button:hover {
+  background: #e1edf5;
+}
+
+:root[data-theme="light"] .theme-toggle {
+  color: #334354;
+  background: #f5f7fa;
+}

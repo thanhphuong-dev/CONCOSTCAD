@@ -6,7 +6,7 @@ Chào mừng bạn đến với **CONCOSTCAD** – Phần mềm đồ họa kỹ
 
 ## 1. GIAO DIỆN LÀM VIỆC (WORKSPACE OVERVIEW)
 
-- **Thanh tiêu đề (Title Bar):** Tên bản vẽ hiện hành, trạng thái sửa đổi (`*`), nút chuyển ngôn ngữ (`EN` / `VI` / `KO`) và điều khiển cửa sổ. Lần chạy đầu dùng EN; ngôn ngữ đã chọn được lưu. Chuỗi chưa dịch và catalog KO hiện dùng nội dung EN dự phòng.
+- **Thanh tiêu đề (Title Bar):** Tên bản vẽ hiện hành, trạng thái sửa đổi (`*`), nút đổi theme sáng/tối, nút chuyển ngôn ngữ (`EN` / `VI` / `KO`) và điều khiển cửa sổ. Theme và ngôn ngữ được lưu trên máy. Lần chạy đầu dùng EN; chuỗi chưa dịch và catalog KO hiện dùng nội dung EN dự phòng. Vùng vẽ giữ nền tối để các màu layer dễ nhìn.
 - **Dải ruy-băng lệnh (Ribbon):** Phân nhóm trực quan theo thẻ:
   - **Home / Vẽ (Draw):** Các công cụ tạo hình học cơ bản (Line, Arc, Polyline, Circle, Rectangle, Text).
   - **Hiệu chỉnh (Modify):** Di chuyển (Move), Sao chép (Copy), Xoay (Rotate), Lấy đối xứng (Mirror), Bo góc (Fillet), Vát mép (Chamfer), Cắt xén (Trim), Kéo dài (Extend), Gộp (Join), Phân rã (Explode).
